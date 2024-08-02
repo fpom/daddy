@@ -1,0 +1,29 @@
+[build-system]
+requires = [
+  "setuptools",
+  "wheel",
+  "cython",
+  "requests",
+]
+
+[project]
+name = "daddy"
+version = "0.1"
+authors = [
+  { name = "Franck Pommereau", email = "franck.pommereau@univ-evry.fr" },
+]
+description = "Data Decision Diagrams with a pythonic interface"
+readme = "README.md"
+requires-python = ">= 3.9"
+dependencies = [
+  "sympy",
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/fpom/daddy"
+"Bug Tracker" = "https://github.com/fpom/daddy/issues"

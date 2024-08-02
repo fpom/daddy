@@ -1,0 +1,5 @@
+/.python-version
+/Makefile
+/pyrightconfig.json
+__pycache__
+/src/daddy/ddd.cpp
