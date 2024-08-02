@@ -2,4 +2,10 @@
 /Makefile
 /pyrightconfig.json
 __pycache__
-/src/daddy/ddd.cpp
+/src/daddy/dddlib.cpp
+/src/build
+/src/*.egg-info
+/src/linux.tgz
+/src/osx.tgz
+/src/windows.zip
+/src/usr

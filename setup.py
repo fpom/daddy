@@ -60,8 +60,8 @@ Options.annotate = False
 
 extensions = [
     Extension(
-        "daddy.ddd",
-        ["daddy/ddd.pyx",
+        "daddy.dddlib",
+        ["daddy/dddlib.pyx",
          "assign/assign.cpp"],
         language="c++",
         include_dirs=[str(DDDINC), "."],

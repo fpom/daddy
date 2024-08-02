@@ -25,7 +25,7 @@ quite some time.
 
 ## Usage
 
-`daddy` module exposes the content of its sub-module `daddy.ddd` that exports
+`daddy` module exposes the content of its sub-module `daddy.dddlib` that exports
 three classes:
 
  - `domain` is the starting point, allowing to define a set of variables over
@@ -34,7 +34,7 @@ three classes:
  - `hom` is an operation on a `ddd` that returns another `ddd` and is used
    as a function
 
-Additionally, `daddy.ddd` defined class `edge` that is used to iterate over the
+Additionally, `daddy.dddlib` defined class `edge` that is used to iterate over the
 structure of a `ddd`. Documentation is currently within the docstrings, to start
 with, look at `domain.__init__` and `domain.__call__`.
 

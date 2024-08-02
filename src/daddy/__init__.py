@@ -1,1 +1,1 @@
-from .ddd import domain, ddd, hom
+from .dddlib import domain, ddd, hom
