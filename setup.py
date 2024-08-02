@@ -72,7 +72,7 @@ extensions = [
 
 setup(
     name="daddy",
-    packages=["daddy"],
+    packages=["daddy", "daddy.pygmy"],
     ext_modules=cythonize(extensions,
                           language_level=3),
 )

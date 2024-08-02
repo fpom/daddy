@@ -9,3 +9,4 @@ __pycache__
 /src/osx.tgz
 /src/windows.zip
 /src/usr
+,*
