@@ -1,4 +1,5 @@
 from libcpp.string cimport string
+from libcpp.vector cimport vector
 
 cdef extern from "dddwrap.h":
     ctypedef short val_t
@@ -41,7 +42,6 @@ cdef class domain:
     cdef hom _call_hom(self, str op)
     cpdef hom const(self, ddd d)
     cpdef hom op(self, str left, str op, object right)
-    cpdef hom assign(self, str tgt, str src, bint aug, int inc, int mul)
 
 cdef class ddd:
     cdef domain f

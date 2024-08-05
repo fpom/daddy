@@ -6,7 +6,6 @@ from pathlib import Path
 from collections import defaultdict
 from subprocess import check_call
 
-from libcpp.vector cimport vector
 from libcpp cimport bool
 from libcpp.pair cimport pair
 
@@ -29,42 +28,48 @@ cdef extern from "dddwrap.h" namespace "std":
 
 _hom_expr = re.compile(r"^\s*(\w+)\s*(=|==|!=|<=|>=|<|>|\+=)\s*(\w.*?)\s*$", re.I)
 
+def _parse_mul(expr):
+    if len(expr.args) != 2:
+        raise ValueError(f"invalid expression '{expr}' (too many factors)")
+    one, two = expr.args
+    if one.is_Integer and two.is_Symbol:
+        return {str(two): int(one)}
+    elif one.is_Symbol and two.is_Integer:
+        return {str(one): int(two)}
+    else:
+        raise ValueError(f"invalid expression '{expr}' (wrong factors)")
+
+def _parse_sum(expr):
+    pass
+    coef = {}
+    inc = 0
+    for term in expr.args:
+        if term.is_Integer:
+            inc += int(term)
+        elif term.is_Symbol:
+            coef[str(term)] = 1
+        elif term.is_Mul:
+            coef.update(_parse_mul(term))
+        else:
+            raise ValueError(f"invalid expression '{term}' (wrong term)")
+    return coef, inc
+
 def _parse_expr(src):
     try:
         expr = sympy.parse_expr(src)
     except Exception as err:
         raise ValueError(f"invalid expression {src} ({err})")
     if expr.is_Integer:
-        return None, int(expr), 0
-    if expr.func.is_Add:
-        if (c := len(expr.args)) != 2:
-            raise ValueError(f"expected exactly two terms, got {c}")
-        if expr.args[0].is_Integer:
-            inc = int(expr.args[0])
-            expr = expr.args[1]
-        elif expr.args[1].is_Integer:
-            inc = int(expr.args[1])
-            expr = expr.args[0]
-        else:
-            raise ValueError(f"expected one int term in '{expr}'")
+        return {}, int(expr)
+    elif expr.is_Symbol:
+        return {str(expr): 1}, 0
+    elif expr.func.is_Mul:
+        return _parse_mul(expr), 0
+    elif expr.func.is_Add:
+        return _parse_sum(expr)
     else:
-        inc = 0
-    if expr.func.is_Mul:
-        if (c := len(expr.args)) != 2:
-            raise ValueError(f"expected exactly two factors, got {c}")
-        if expr.args[0].is_Integer:
-            mul = int(expr.args[0])
-            expr = expr.args[1]
-        elif expr.args[1].is_Integer:
-            mul = int(expr.args[1])
-            expr = expr.args[0]
-        else:
-            raise ValueError(f"expected one int factor in '{expr}'")
-    else:
-        mul = 1
-    if not expr.is_Symbol:
         raise ValueError(f"invalid expression {expr}")
-    return str(expr), inc, mul
+        
 
 ##
 ## domain (aka, factory)
@@ -105,7 +110,7 @@ cdef extern from "ddd/Hom_Basic.hh":
     cdef Hom varGeqVar(int var, int var2)
 
 cdef extern from "assign/assign.hh":
-    Hom assignHom(int, int, int, int, int)
+    Hom linearAssignHom(int, vector[int], int)
 
 cdef class domain:
     """`ddd` and `hom` factory
@@ -174,6 +179,14 @@ cdef class domain:
         self.full.d = tmp.d
         self.one.d = ddd_new_ONE()
         self.empty.d = ddd_new_EMPTY()
+
+    def __len__(self):
+        """number of variables in the domain
+
+        >>> len(domain(x=3, y=4))
+        2
+        """
+        return len(self.vars)
 
     def __eq__(self, domain other):
         """domains equality
@@ -378,7 +391,18 @@ cdef class domain:
         >>> h(dom.full) == dom(x=0, y=0)
         True
 
-        TODO: more tests for = and +=
+        More complex assignments are possible but involve parsing on the
+        right-hand side of the assignment that must be an integer linear
+        combination of variables.
+
+        >>> dom = domain(x=10, y=10, z=10)
+        >>> d = dom(x=1, y=1, z=1)
+        >>> h = dom("x = y + 2*z + 3")
+        >>> h(d) == dom(x=6, y=1, z=1)
+        True
+        >>> h = dom("y += x + 2*z + 3")
+        >>> h(d) == dom(x=1, y=7, z=1)
+        True
         """
         if (a := len(largs)) == 0:
             expr = None
@@ -429,7 +453,8 @@ cdef class domain:
     cdef hom _call_hom(self, str expr):
         "auxiliary method for `__call__`"
         cdef str left, op, right, var
-        cdef int inc, mul
+        cdef int inc
+        cdef dict coef
         cdef object match = _hom_expr.match(expr)
         if match is None:
             raise ValueError(f"invalid 'hom' expression '{expr}'")
@@ -439,8 +464,10 @@ cdef class domain:
         elif right in self.vmap:
             return self.op(left, op, right)
         elif op == "=" or op == "+=":
-            var, inc, mul = _parse_expr(right)
-            return self.assign(left, var, op == "+=", inc, mul)
+            coef, inc = _parse_expr(right)
+            if op == "+=":
+                coef[left] = 1 + coef.get(left, 0)
+            return self.assign(left, inc, **coef)
         else:
             raise ValueError(f"unsupported 'hom' expression '{expr}'")
 
@@ -457,7 +484,8 @@ cdef class domain:
 
         Same as `domain.__call__("left op right")` but does not need parsing
         """
-        cdef int val, lft, rgt
+        cdef int val, lft, rgt, i
+        cdef list coef
         cdef Hom r
         try:
             lft = self.vmap[left]
@@ -501,9 +529,13 @@ cdef class domain:
             elif op == ">=":
                 r = varGeqVar(lft, rgt)
             elif op == "=":
-                r = assignHom(lft, rgt, 0, 0, 1)
+                coef = [1 if i == rgt else 0
+                        for i in range(len(self.vars))]
+                r = linearAssignHom(lft, coef, 0)
             elif op == "+=":
-                r = assignHom(lft, rgt, 1, 0, 1)
+                coef = [1 if i == rgt or i == lft
+                        else 0 for i in range(len(self.vars))]
+                r = linearAssignHom(lft, coef, 0)
             else:
                 raise ValueError(f"unsupported operator '{op}'")
         else:
@@ -511,25 +543,15 @@ cdef class domain:
                             f" {right.__class__.__name__}")
         return self.makehom(r)
 
-    cpdef hom assign(self, str tgt, str src, bint aug, int inc, int mul):
-        """return a `hom` that implement an assignment
-
-        The assignement is either:
-         - `tgt = mul*src + inc` if `aug` is false, or
-         - `tgt += mul*src + inc` if `aug` is true
-        where `tgt` and `src` are two variables, and `inc` and `mul`
-        are constants.
-        """
-        cdef int t, s
+    def assign(self, str tgt, int inc, **coef):
+        cdef str v
+        cdef int t
+        cdef list c = [coef.get(v, 0) for v in self.vars]
         try:
             t = self.vmap[tgt]
         except KeyError:
             raise ValueError(f"unknown variable {tgt}")
-        try:
-            s = self.vmap[src]
-        except KeyError:
-            raise ValueError(f"unknown variable {src}")
-        return self.makehom(assignHom(t, s, int(aug), inc, mul))
+        return self.makehom(linearAssignHom(t, c, inc))
 
     def save(self, str path, *ddds, **headers):
         """save a series of `ddd`s to a file

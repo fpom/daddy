@@ -74,6 +74,21 @@ class Code(ABC):
             yield name, base
 
 
+@dataclass(frozen=True)
+class Compound(Code, ABC):
+    def py(self, prefix=""):
+        out = io.StringIO()
+        for indent, line in self._py():
+            out.write(prefix)
+            out.write("    " * indent)
+            out.write(line)
+            out.write("\n")
+        return out.getvalue()
+
+    def _py(self):
+        raise NotImplementedError
+
+
 #
 # expressions
 #
@@ -179,18 +194,8 @@ class Call(Expr):
 
 
 @dataclass(frozen=True)
-class Stmt(Code, ABC):
-    def py(self, prefix=""):
-        out = io.StringIO()
-        for indent, line in self._py():
-            out.write(prefix)
-            out.write("    " * indent)
-            out.write(line)
-            out.write("\n")
-        return out.getvalue()
-
-    def _py(self):
-        raise NotImplementedError
+class Stmt(Compound, ABC):
+    pass
 
 
 @dataclass(frozen=True)
@@ -270,7 +275,7 @@ class BareCall(Stmt):
 
 
 @dataclass(frozen=True)
-class Decl(Code, ABC):
+class Decl(Compound, ABC):
     pass
 
 

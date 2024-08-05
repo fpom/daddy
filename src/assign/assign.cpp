@@ -2,43 +2,10 @@
 
 // implementations details borrowed from <libDDD>/demo/SetVar.cpp
 
-class _AssignConst:public StrongHom {
-  int var, val, aug;
-public:
-  _AssignConst(int vr, int vl, int ag):var(vr),val(vl),aug(ag) {}
-
-  GDDD phiOne() const {
-    return GDDD::one;
-  }
-
-  GHom phi(int vr, int vl) const {
-    if (vr != var) {
-      return GHom(vr, vl, GHom(this)); 
-    } else if (aug) {
-      return GHom(vr, vl + val);
-    } else {
-      return GHom(vr, val);
-    }
-  }
-
-  size_t hash() const {
-    return (aug*31 + val)*31 + var;
-  }
-
-  bool operator==(const StrongHom &s) const {
-    _AssignConst* ps = (_AssignConst*)&s;
-    return var == ps->var && val == ps->val && aug == ps->aug;
-  }
-
-  _GHom * clone () const {
-    return new _AssignConst(*this);
-  }
-};
-
-class _AssignUp:public StrongHom {
+class _LinearUp:public StrongHom {
   int var, val;
 public:
-  _AssignUp(int vr, int vl):var(vr),val(vl) {}
+ _LinearUp(int vr, int vl):var(vr),val(vl) {}
 
   GDDD phiOne() const {
     return GDDD::top;
@@ -53,93 +20,85 @@ public:
   }
 
   bool operator==(const StrongHom &s) const {
-    _AssignUp* ps = (_AssignUp*)&s;
+    _LinearUp* ps = (_LinearUp*)&s;
     return var == ps->var && val == ps->val;
   }
 
   _GHom * clone () const {
-    return new _AssignUp(*this);
+    return new _LinearUp(*this);
   }
 };
 
-class _AssignDown:public StrongHom {
-  int tgt, src, inc, mul;
+class _LinearDown:public StrongHom {
+  int tgt, inc;
+  std::vector<int> coef;
 public:
-  _AssignDown(int t, int s, int i, int m):tgt(t),src(s),inc(i),mul(m) {}
+  _LinearDown(int t, std::vector<int> c, int i):tgt(t),inc(i),coef(c) {}
 
   GDDD phiOne() const {
-    return GDDD::top;
+    return GDDD(tgt, inc, GDDD::one);
   }
 
   GHom phi(int vr, int vl) const {
-    if (vr == src) {
-      return GHom(tgt, mul*vl + inc, GHom(vr, vl));
-    } else {
-      return GHom(_AssignUp(vr, vl)) & GHom(this);
-    }
+    int ni = vl*coef[vr] + inc;
+    return GHom(_LinearUp(vr, vl)) & GHom(_LinearDown(tgt, coef, ni));
   }
 
   size_t hash() const {
-    return ((mul*31 + inc)*31 + src)*31 + tgt;
+    int h = 0;
+    for (int i=0; i<(int)coef.size(); i++) {
+      h = h*31 + i;
+    }
+    return (h*31 + inc)*31 + tgt;
   }
 
   bool operator==(const StrongHom &s) const {
-    _AssignDown* ps = (_AssignDown*)&s;
-    return tgt == ps->tgt && src == ps->src && inc == ps->inc && mul == ps->mul;
+    _LinearDown* ps = (_LinearDown*)&s;
+    return tgt == ps->tgt && inc == ps->inc && coef == ps->coef;
   }
 
   _GHom * clone () const {
-    return new _AssignDown(*this);
+    return new _LinearDown(*this);
   }
 };
 
-class _Assign:public StrongHom {
-  int tgt, src, aug, inc, mul;
+class _Linear:public StrongHom {
+  int tgt, inc;
+  std::vector<int> coef;
 public:
-  _Assign(int t, int s, int a, int i, int m):tgt(t),src(s),aug(a),inc(i),mul(m) {}
+  _Linear(int t, std::vector<int> c, int i):tgt(t),inc(i),coef(c) {}
 
   GDDD phiOne() const {
     return GDDD::one;
-  }                   
+  }
 
   GHom phi(int vr, int vl) const {
-    if (vr == tgt && vr == src) {
-      if (aug) {
-        return GHom(vr, vl + mul*vl + inc);
-      } else {
-        return GHom(vr, mul*vl + inc);
-      }
-    } else if (vr == src) {
-      return GHom(vr, vl, GHom(_AssignConst(tgt, mul*vl + inc, aug)));
-    } else if (vr != tgt) {
-      return GHom(vr, vl, GHom(this));
-    } else if (aug) {
-      return GHom(_AssignDown(tgt, src, vl+inc, mul));
+    int ni = vl*coef[vr] + inc;
+    if (vr == tgt) {
+      return GHom(_LinearDown(tgt, coef, ni));
     } else {
-      return GHom(_AssignDown(tgt, src, inc, mul));
+      return GHom(vr, vl, GHom(_Linear(tgt, coef, ni)));
     }
   }
 
   size_t hash() const {
-    return (((mul*31 + inc)*31 + aug)*31 + src)* 31 + tgt;
+    int h = 0;
+    for (int i=0; i<(int)coef.size(); i++) {
+      h = h*31 + i;
+    }
+    return (h*31 + inc)*31 + tgt;
   }
 
   bool operator==(const StrongHom &s) const {
-    _Assign* ps = (_Assign*)&s;
-    return tgt == ps->tgt && src == ps->src && aug == ps->aug && inc == ps->inc && mul == ps->mul;
+    _Linear* ps = (_Linear*)&s;
+    return tgt == ps->tgt && inc == ps->inc && coef == ps->coef;
   }
 
   _GHom * clone () const {
-    return new _Assign(*this);
+    return new _Linear(*this);
   }
 };
 
-GHom assignHom(int tgt, int src, int aug, int inc, int mul) {
-  if (mul == 0 && inc == 0 && aug) {
-    return GHom();
-  } else if (mul == 0) {
-    return GHom(_AssignConst(tgt, inc, aug));
-  } else {
-    return GHom(_Assign(tgt, src, aug, inc, mul));
-  }
+GHom linearAssignHom(int tgt, std::vector<int> coef, int inc) {
+  return GHom(_Linear(tgt, coef, inc));
 }

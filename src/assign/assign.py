@@ -63,7 +63,7 @@ class Hom:
     set `Hom.log = True` to trace every call and computation steps
     (doing this will make doctests fail because of extra output)
     """
-    log = False
+    log = True
 
     def phi(self, e, x):
         """method to be implemented, as in libDDD
@@ -77,13 +77,16 @@ class Hom:
         """
         return [e, x], self
 
+    def one(self):
+        return ddd()
+
     def __repr__(self):
         return "</>"
 
     def __call__(self, d, ctx="{}"):
         "implementation of applying an homomorphism onto a ddd"
         if not d:
-            return ddd()
+            return self.one()
         elif self.__class__ is Hom:
             # shortcut to simply traces when `Hom.log == True`
             return d
@@ -113,41 +116,6 @@ class Hom:
 
 
 @dataclass
-class Const(Hom):
-    """homomorphism to implement `var = val` or `var += val`
-
-     - `var` is the DDD variable to be assigned
-     - `val` is the value to assign to the variable
-     - `aug` is to choose between `=` and `+=`
-    """
-    var: str
-    val: int
-    aug: bool = False
-
-    def __repr__(self):
-        a = "+" if self.aug else ""
-        return f"<{self.var}{a}={self.val}>"
-
-    def phi(self, e, x):
-        """
-        >>> d = ddd(a=1, b=2, c=3, d=4)
-        >>> Const("b", 0)(d)  # b = 0
-        [a=1, b=0, c=3, d=4]
-        >>> Const("b", 10, True)(d)  # b += 10
-        [a=1, b=12, c=3, d=4]
-        """
-        if e != self.var:
-            # copy edge and recurse to `var`
-            return [e, x], self
-        elif self.aug:
-            # perform augmented assignment of `var`
-            return [e, x+self.val], Hom()
-        else:
-            # perform simple assignment of `var`
-            return [e, self.val], Hom()
-
-
-@dataclass
 class Up(Hom):
     "insert an edge `var=val` after the top-most edge"
     var: str
@@ -172,111 +140,40 @@ class Down(Hom):
     assume tgt was the head of the DDD and has been removed already
     """
     tgt: str
-    src: str
+    coef: dict[str, int]
     inc: int = 0
-    mul: int = 1
 
     def __repr__(self):
-        return f"<{self.tgt}={self.mul}*{self.src}+{self.inc}|>"
+        return f"<{self.tgt}={self.coef}+{self.inc}|>"
 
     def phi(self, e, x):
-        """
-        >>> d = ddd(b=2, c=3, d=4)  # a has been removed
-        >>> Down("a", "d")(d)       # and it is assigned back
-        [a=4, b=2, c=3, d=4]
-        """
-        if e == self.src:
-            # perform assignment
-            return [self.tgt, self.mul*x + self.inc, e, x], Hom()
-        else:
-            # recurse in tail, then put head back using Up
-            return [], Up(e, x) * self
+        # new const to add = old + this var multiplied
+        ni = x*self.coef[e] + self.inc
+        # recurse in tail with new coefs, then put head back
+        return [], Up(e, x) * Down(self.tgt, self.coef, ni)
+
+    def one(self):
+        # when reaching end, put result for target, it will be put back
+        # at its position using all the Up's
+        return ddd(self.tgt, self.inc)
 
 
 @dataclass
 class Assign(Hom):
     "main assignment class"
     tgt: str
-    src: str
-    aug: bool = False
+    coef: dict[str, int]
     inc: int = 0
-    mul: int = 1
 
     def __repr__(self):
-        a = "+" if self.aug else ""
-        return f"<{self.tgt}{a}={self.mul}*{self.src}+{self.inc}>"
+        return f"<{self.tgt}={self.coef}+{self.inc}>"
 
     def phi(self, e, x):
-        """
-        >>> d = ddd(a=1, b=2, c=3, d=4)
-        >>> Assign("a", "d")(d)
-        [a=4, b=2, c=3, d=4]
-        >>> Assign("d", "a")(d)
-        [a=1, b=2, c=3, d=1]
-        """
-        if e == self.src == self.tgt:
-            # assigning variable to itself must be done in-place
-            if self.aug:
-                return [e, x + self.mul*x + self.inc], Hom()
-            else:
-                return [e, self.mul*x + self.inc], Hom()
-        elif e == self.src:
-            # src is before tgt => assign a const
-            return [e, x], Const(self.tgt, self.mul*x + self.inc, self.aug)
-        elif e != self.tgt:
-            # tgt nor src reached => recurse in tail
-            return [e, x], self
-        elif self.aug:  # and e == self.tgt
-            # tgt reached (before src) => use down
-            # since aug is true, add the current value of edge to inc
-            return [], Down(self.tgt, self.src, x + self.inc, self.mul)
-        else:  # not self.aug and e == self.tgt
-            # tgt reached (before src) => use down
-            # since aug is false, the current value of edge is discarded
-            return [], Down(self.tgt, self.src, self.inc, self.mul)
-
-    def apply(self, d):
-        "simulate the expected result by direct change in the faked ddd class"
-        if self.aug:
-            return d(**{self.tgt:
-                        d[self.tgt] + self.mul*d[self.src] + self.inc})
+        # new const to add = old + this var multiplied
+        ni = x*self.coef[e] + self.inc
+        if e == self.tgt:
+            # need Down to perform assignment after computation
+            return [], Down(self.tgt, self.coef, ni)
         else:
-            return d(**{self.tgt:
-                        self.mul*d[self.src] + self.inc})
-
-
-def ass(tgt, src, aug, inc, mul):
-    "chose appropriate homomorphism to optimize calls wrt on mul and inc"
-    if inc == 0 and mul == 0 and aug:
-        # tgt += 0  => identity
-        return Hom()
-    elif mul == 0:
-        # tgt (+)= inc  => constant assignment
-        return Const(tgt, inc, aug)
-    else:
-        # general case
-        return Assign(tgt, src, aug, inc, mul)
-
-
-if __name__ == "__main__":
-    # doctests
-    import doctest
-    doctest.testmod()
-    # systematic test of many cases
-    d = ddd(a=1, b=2, c=3, d=4)
-    for mul in [1, 0, 3]:
-        for aug in [False, True]:
-            for inc in [0, 10]:
-                for x, y in ["da", "ad", "bb"]:
-                    a = Assign(x, y, aug, inc, mul)
-                    e = ass(a.tgt, a.src, a.aug, a.inc, a.mul)
-                    if Hom.log:
-                        print(f"{a}({d})")
-                    r = a(d)
-                    if Hom.log:
-                        print("=>", r)
-                        if a != e:
-                            print(f"~ {e}")
-                        print()
-                    x = a.apply(d)
-                    assert r == x, f"{r} != {x}"
+            # just recurse in tail
+            return [e, x], Assign(self.tgt, self.coef, ni)

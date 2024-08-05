@@ -1,12 +1,9 @@
-#ifndef __ASSIGN_HH
-#define __ASSIGN_HH
+#ifndef __LINEFULL_HH
+#define __LINEFULL_HH
 
 #include "ddd/Hom.h"
+#include <vector>
 
-// `assign_hom(tgt, src, aug, inc, mul)` implements either:
-//  - `tgt = mul*src + inc` if `aug` is false
-//  - `tgt += mul*src + inc` if `aug` is true
-// where `tgt` and `src` are two DDD variables, and `inc` and `mul` are ints
-GHom assignHom(int tgt, int src, int aug, int inc, int mul);
+GHom linearAssignHom(int tgt, std::vector<int> coef, int inc);
 
 #endif
