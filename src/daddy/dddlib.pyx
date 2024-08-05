@@ -282,9 +282,9 @@ cdef class domain:
            b. If `OP` is `=`, the resulting `hom` assigns `y` to `x`
            c. If `OP` is `+=`, the resulting `hom` increments `x` by `y`
 
-        In cases 5.b and 5.c, `y` may also be an expression equivalent of `m*z+i`
-        where, `z` is a variable and `m`, `i` are constants. The exact syntax is
-        very general as the expression is parsed and simplified by `sympy`.
+        In cases 5.b and 5.c, `y` may also be an integer linear combination of
+        variables. The exact syntax is very general as the expression is 
+        parsed and simplified by `sympy`.
 
         As noted above, only the identity `hom` and those constructed with
         comparison operators (case 5.a) are selectors and are suitable to
@@ -543,15 +543,28 @@ cdef class domain:
                             f" {right.__class__.__name__}")
         return self.makehom(r)
 
-    def assign(self, str tgt, int inc, **coef):
+    def assign(self, str _tgt, int _inc, **coef):
+        """return a `hom` that implements an assignment
+
+        The implemented assignment is `_tgt = _inc + lin` where `lin` is an
+        integer linear combination of variables. For instance, `x += y` may be
+        implemented with `assign("x", 0, y=1)`, and `assign("x", 2, x=1, y=3)`
+        implements `x += 3*y + 2` that is equivalent to `x = x + 3*y + 2`.
+
+        Note, `_` on the arguments are to avoid name clashes with variables
+        for the domain.
+        """
         cdef str v
         cdef int t
         cdef list c = [coef.get(v, 0) for v in self.vars]
+        for v in coef:
+            if v not in self.vmap:
+                raise ValueError(f"unknown variable {v}")
         try:
-            t = self.vmap[tgt]
+            t = self.vmap[_tgt]
         except KeyError:
-            raise ValueError(f"unknown variable {tgt}")
-        return self.makehom(linearAssignHom(t, c, inc))
+            raise ValueError(f"unknown variable {_tgt}")
+        return self.makehom(linearAssignHom(t, c, _inc))
 
     def save(self, str path, *ddds, **headers):
         """save a series of `ddd`s to a file
