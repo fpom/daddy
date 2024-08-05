@@ -551,8 +551,8 @@ cdef class domain:
         implemented with `assign("x", 0, y=1)`, and `assign("x", 2, x=1, y=3)`
         implements `x += 3*y + 2` that is equivalent to `x = x + 3*y + 2`.
 
-        Note, `_` on the arguments are to avoid name clashes with variables
-        for the domain.
+        Note: `_` on the arguments are to avoid name clashes with variables
+        from the domain.
         """
         cdef str v
         cdef int t
