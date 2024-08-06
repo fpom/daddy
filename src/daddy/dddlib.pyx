@@ -282,9 +282,25 @@ cdef class domain:
            b. If `OP` is `=`, the resulting `hom` assigns `y` to `x`
            c. If `OP` is `+=`, the resulting `hom` increments `x` by `y`
 
-        In cases 5.b and 5.c, `y` may also be an integer linear combination of
-        variables. The exact syntax is very general as the expression is 
+        In cases (5.b) and (5.c), `y` may also be an integer linear combination
+        of variables. The exact syntax is very general as the expression is
         parsed and simplified by `sympy`.
+
+        >>> dom = domain(x=2, y=2)
+        >>> dom() == dom.full  # case (1)
+        True
+        >>> d = dom(x=0, y=1)  # case (3)
+        >>> isinstance(d, ddd) and len(d) == 1
+        True
+        >>> h = dom("id")  # case (2)
+        >>> h(d) == d
+        True
+        >>> h = dom(":=", x=1, y=0)  # case (4)
+        >>> h(d) == h(dom.full) == dom(x=1, y=0)
+        True
+        >>> h = dom("x = y")  # case (5.a)
+        >>> h(d) == dom(x=1, y=1)
+        True
 
         As noted above, only the identity `hom` and those constructed with
         comparison operators (case 5.a) are selectors and are suitable to
@@ -475,14 +491,16 @@ cdef class domain:
         """return a contant `hom` that returns `d`
 
         Same as `domain.__call__(":=", ...)` but more general as `d` can be
-        a `ddd` that could not be specified as `...`
+        a `ddd` that could not be specified as an argument to `__call__`.
         """
         return self.makehom(Hom(d.d))
 
     cpdef hom op(self, str left, str op, object right):
         """return a `hom` that implements an operation
 
-        Same as `domain.__call__("left op right")` but does not need parsing
+        Same as `domain.__call__("left op right")` but does not need parsing,
+        restricted to `left` being a variable, and `right` being a variable or
+        an integer litteral.
         """
         cdef int val, lft, rgt, i
         cdef list coef
@@ -515,7 +533,7 @@ cdef class domain:
             try:
                 rgt = self.vmap[right]
             except KeyError:
-                raise ValueError(f"unknown variable {left}")
+                raise ValueError(f"unknown variable {right}")
             if op == "==":
                 r = varEqVar(lft, rgt)
             elif op == "!=":
@@ -551,8 +569,8 @@ cdef class domain:
         implemented with `assign("x", 0, y=1)`, and `assign("x", 2, x=1, y=3)`
         implements `x += 3*y + 2` that is equivalent to `x = x + 3*y + 2`.
 
-        Note: `_` on the arguments are to avoid name clashes with variables
-        from the domain.
+        Note: header `_` on the arguments are to avoid name clashes with
+        variables from the domain.
         """
         cdef str v
         cdef int t
@@ -1216,6 +1234,29 @@ cdef class ddd:
         if (fmt := path.suffix.lower().lstrip(".")) != "dot":
             check_call(["dot", f"-T{fmt}", "-o", path, path_dot])
 
+    cpdef ddd clip(self):
+        """restrict `ddd` to its domain
+
+        `ddd` that contain valuations out of he domain may be produced by some
+        homomorphisms, (see `hom.clip`), method `ddd.clip` allows to fix this
+        for a given `ddd`, method `hom.clip` allows to fix this at the level
+        of an homomorphism.
+
+        >>> dom = domain(x=(0, 1))
+        >>> d = dom(x=0)
+        >>> h = dom("x += 5")
+        >>> h(d) <= dom.full
+        False
+        >>> for v in h(d).values():
+        ...     print(v)
+        {'x': 5}
+        >>> h(d).clip() <= dom.full
+        True
+        >>> len(h(d).clip())
+        0
+        """
+        return self & self.f.full
+
 ##
 ## Hom
 ##
@@ -1476,7 +1517,7 @@ cdef class hom:
         """restriction tho the domain
 
         `h(d)` is not guaranteed to be included in the domain of `h`,
-        but `h.clip()(d)` is as it is `h & h.domain.full`
+        but `h.clip()(d)` is as it is `h & h.domain.full` (see also `ddd.clip`)
 
         >>> dom = domain(x=(0, 1))
         >>> d = dom(x=0)

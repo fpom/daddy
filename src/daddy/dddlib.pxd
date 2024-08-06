@@ -47,6 +47,7 @@ cdef class ddd:
     cdef domain f
     cdef DDD d
     cdef DDD _pick(self, DDD d)
+    cpdef ddd clip(self)
 
 cdef class edge:
     cdef public str var
