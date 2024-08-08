@@ -2,16 +2,48 @@ import ast
 
 from typing import NoReturn
 from itertools import chain
+from dataclasses import dataclass
+from collections import namedtuple
+from contextlib import contextmanager
+from inspect import isclass
 
 from . import LangError
-from .lang import Const, Name, Op, Lookup, Call, BareCall, Attr, Item, Loop, \
-    Comprehension, Assign, If, For, Func, Return, Var, Struct, Param
+from .lang import Const, Name, Op, Lookup, Call, BareCall, Attr, Item, \
+    Assign, If, For, Func, Return, Var, Class, Pass
+
+
+class ACDC:
+    _known = {}
+    _decl = Class("_ACDC_")
+
+    @classmethod
+    def make(cls, value):
+        if isinstance(value, cls):
+            return cls
+        value = dict(value)
+        fields = {}
+        for f in cls._decl.fields:
+            val = value[f.name]
+            if f.size is not None and f.size != len(val):
+                raise ValueError("wrong length")
+            if issubclass(f.type, ACDC):
+                if f.size is None:
+                    fields[f.name] = f.type.make(val)
+                else:
+                    fields[f.name] = [f.type.make(v) for v in val]
+            else:
+                if f.size is None:
+                    fields[f.name] = f.type(val)
+                else:
+                    fields[f.name] = [f.type(v) for v in val]
+        return cls(**fields)
 
 
 class NodeTransformer(ast.NodeTransformer):
     def __init__(self, fname, src):
         self.fname = fname
         self.src = src
+        self.env = {}
 
     def error(self, msg, node) -> NoReturn:
         raise LangError(msg,
@@ -19,6 +51,35 @@ class NodeTransformer(ast.NodeTransformer):
                         node.lineno,
                         node.col_offset,
                         self.src[node.lineno - 1])
+
+    def static(self, node, name=None):
+        if name:
+            n = ast.Module(body=[node])
+            ast.fix_missing_locations(n)
+            code = compile(n, self.fname, "exec")
+        else:
+            n = ast.Expression(body=node)
+            ast.fix_missing_locations(n)
+            code = compile(n, self.fname, "eval")
+        try:
+            if name is None:
+                ret = eval(code, dict(self.env))
+            else:
+                loc = {}
+                exec(code, dict(self.env), loc)
+                ret = loc[name]
+        except Exception as err:
+            self.error(f"not static expression ({err})", node)
+        return self._dc2d(ret)
+
+    def _dc2d(self, obj):
+        if hasattr(obj, "__dataclass_fields__") and \
+                (cname := obj.__class__.__name__) in self.env and \
+                isinstance(obj, self.env[cname]):
+            return {k: self._dc2d(getattr(obj, k))
+                    for k in obj.__dataclass_fields__}
+        else:
+            return obj
 
     def visit(self, node):
         code = super().visit(node)
@@ -118,9 +179,9 @@ class CodeParser(NodeTransformer):
         if node.keywords:
             self.error("unsupported argument", node.keywords)
         func = self.visit(node.func)
-        if not isinstance(func, Lookup):
+        if not isinstance(func, Name):
             self.error("unsupported function", node.func)
-        return Call(func, tuple(self.visit(a) for a in node.args))
+        return Call(func.id, tuple(self.visit(a) for a in node.args))
 
     def visit_Expr(self, node):
         if not isinstance(node.value, ast.Call):
@@ -128,10 +189,10 @@ class CodeParser(NodeTransformer):
         elif node.value.keywords:
             self.error("unsupported argument", node.value.keywords)
         func = self.visit(node.value.func)
-        if not isinstance(func, Lookup):
+        if not isinstance(func, Name):
             self.error("unsupported function", node.value.func)
         return BareCall(Call.make(node,
-                                  func,
+                                  func.id,
                                   tuple(self.visit(a)
                                         for a in node.value.args)))
 
@@ -140,24 +201,6 @@ class CodeParser(NodeTransformer):
 
     def visit_Subscript(self, node):
         return Item(self.visit(node.value), self.visit(node.slice))
-
-    def visit_GeneratorExp(self, node):
-        if len(node.generators) != 1:
-            self.error("unsupported multiple generators", node.generators[1])
-        gen = node.generators[0]
-        if not isinstance(gen.target, ast.Name):
-            self.error("unsupported iterator", gen.target)
-        loop = Loop.make(node, self.src, self.fname,
-                         name=self.visit(gen.target),
-                         iter=self.visit(gen.iter))
-        match len(gen.ifs):
-            case 0:
-                cond = Const.make(node, self.src, self.fname, val=True)
-            case 1:
-                cond = self.visit(gen.ifs[0])
-            case _:
-                cond = Op("and", tuple(self.visit(i) for i in gen.ifs))
-        return Comprehension(self.visit(node.elt), loop, cond)
 
     def visit_Assign(self, node):
         if len(node.targets) != 1:
@@ -190,10 +233,12 @@ class CodeParser(NodeTransformer):
             self.error("unsupported iterator", node.target)
         if node.orelse:
             self.error("unsupported 'else' in for loop", node)
-        return For(Loop.make(node, self.src, self.fname,
-                             name=self.visit(node.target),
-                             iter=self.visit(node.iter)),
-                   tuple(self.visit(s) for s in node.body))
+        items = self.static(ast.Call(func=ast.Name(id="list",
+                                                   ctx=ast.Load()),
+                                     args=[node.iter]))
+        return For(name=self.visit(node.target),
+                   items=tuple(items),
+                   body=tuple(self.visit(s) for s in node.body))
 
     def visit_Return(self, node):
         if node.value is None:
@@ -201,75 +246,84 @@ class CodeParser(NodeTransformer):
         else:
             return Return(self.visit(node.value))
 
+    def visit_Pass(self, node):
+        return Pass()
+
+    def visit_AnnAssign(self, node):
+        self.error("forbidden nested declaration", node)
+
+    def visit_FunctionDef(self, node):
+        self.error("forbidden nested declaration", node)
+
+    def visit_ClassDef(self, node):
+        self.error("forbidden nested declaration", node)
+
 
 class TopParser(NodeTransformer):
     def __init__(self, fname, src):
         super().__init__(fname, src)
+        self.decl = {}
         self.parser = CodeParser(fname, src)
+        self.parser.env = self.env
+        self.var = {}
+        self.cls = {}
+        self.fun = {}
+
+    @contextmanager
+    def newdecl(self):
+        decl, self.decl = self.decl, {}
+        yield
+        self.decl = decl
 
     def visit_AnnAssign(self, node):
         if not isinstance(node.target, ast.Name):
             self.error("unsupported variable declaration", node.target)
+        if (lno := self.decl.get(node.target.id, None)) is not None:
+            self.error(f"already declared line {lno}", node)
+        self.decl[node.target.id] = node.lineno
         if isinstance(node.annotation, ast.Subscript):
             if not isinstance(node.annotation.value, ast.Name):
                 self.error("unsupported type", node.annotation.value)
             typ_ = node.annotation.value.id
             if not isinstance(node.annotation.slice, (ast.Name, ast.Constant)):
                 self.error("unsupported size", node.annotation.slice)
-            size = self.visit(node.annotation.slice)
-            if isinstance(size, Name):
-                size = size.id
+            size = self.static(node.annotation.slice)
+            if not isinstance(size, int):
+                self.error("invalid size", node.annotation.slice)
         elif isinstance(node.annotation, ast.Name):
             typ_ = node.annotation.id
             size = None
         else:
             self.error("unsupported type", node.annotation)
-        # TODO: allow init with static comprehension
-        return Var(node.target.id,
-                   typ_,
-                   size,
-                   None if node.value is None else self.visit(node.value))
+        if typ_ in ("int", "bool"):
+            typ_ = int
+        elif typ_ in self.cls:
+            typ_ = self.env[typ_]
+        else:
+            self.error("unsupported type", node.annotation)
+        if node.value is None:
+            init = None
+        else:
+            # TODO: check type here instead of in static
+            init = self.static(node.value)
+        var = Var(node.target.id, typ_, size, init)
+        self.var[var.name] = var
+        return var
 
     def visit_Assign(self, node):
         if not len(node.targets) == 1:
             self.error("unsupporter multiple assignments", node)
         if not isinstance(node.targets[0], ast.Name):
             self.error("unsupported variable declaration", node.targets[0])
-        if isinstance(node.value, ast.Constant):
-            if not isinstance(node.value.value, int):
-                self.error("unsupported type for parameter", node.value)
-            return Param(node.targets[0].id, node.value.value)
-        elif isinstance(node.value, ast.Name):
-            return Param(node.targets[0].id, node.value.id)
-        else:
-            self.error("unsupported parameter initialisation", node.value)
-
-    def visit_List(self, node):
-        ret = []
-        for elt in node.elts:
-            v = self.visit(elt)
-            ret.append(v.val if isinstance(v, Const) else v)
-        return ret
-
-    def visit_Dict(self, node):
-        ret = {}
-        for k, v in zip(node.keys, node.values):
-            if isinstance(k, ast.Name):
-                k = k.id
-            elif isinstance(k, ast.Constant) and isinstance(k.value, str):
-                k = k.value
-            else:
-                self.error("unsupported key", k)
-            v = self.visit(v)
-            ret[k] = v.val if isinstance(v, Const) else v
-        return ret
-
-    def visit_Constant(self, node):
-        if not isinstance(node.value, (int, bool)):
-            self.error("unsupported value", node)
-        return node.value
+        if (lno := self.decl.get(node.targets[0].id, None)) is not None:
+            self.error(f"already declared line {lno}", node)
+        self.decl[node.targets[0].id] = node.lineno
+        self.env[node.targets[0].id] = self.static(node.value)
 
     def visit_FunctionDef(self, node):
+        if (lno := self.decl.get(node.name, None)) is not None:
+            self.error(f"already declared line {lno}", node)
+        self.decl[node.name] = node.lineno
         if node.returns:
             self.error("unsupported function annotation", node.returns)
         if node.decorator_list:
@@ -287,11 +341,16 @@ class TopParser(NodeTransformer):
                        (node.args.kw_defaults or node.args.defaults)[0])
         args = tuple(a.arg for a in chain(node.args.posonlyargs,
                                           node.args.args))
-        return Func(node.name,
-                    args,
-                    tuple(self.parser.visit(child) for child in node.body))
+        self.env[node.name] = self.static(node, node.name)
+        self.fun[node.name] = Func(node.name,
+                                   args,
+                                   tuple(self.parser.visit(child)
+                                         for child in node.body))
 
     def visit_ClassDef(self, node):
+        if (lno := self.decl.get(node.name, None)) is not None:
+            self.error(f"already declared line {lno}", node)
+        self.decl[node.name] = node.lineno
         if node.keywords:
             self.error("unsupported syntax", node.keywords[0])
         parents = []
@@ -299,17 +358,33 @@ class TopParser(NodeTransformer):
             if not isinstance(b, ast.Name):
                 self.error("expected name", b)
             parents.append(b.id)
-        fields = []
-        for s in node.body:
-            v = self.visit(s)
-            if not isinstance(v, Var):
-                self.error("unexpected field", s)
-            fields.append(v)
-        return Struct(node.name, tuple(fields), tuple(parents))
+        with self.newdecl():
+            fields = []
+            for s in node.body:
+                v = self.visit(s)
+                if not isinstance(v, Var):
+                    self.error("expected field", s)
+                fields.append(v)
+        c = Class(node.name, tuple(fields), tuple(parents))
+        self.env[node.name] = self._dataclass(self.static(node, node.name), c)
+        self.cls[c.name] = c
+
+    def _dataclass(self, cls, decl):
+        class _ACDC_(dataclass(cls), ACDC):
+            _known = {n: self.env[n] for n in self.cls}
+            _decl = decl
+        return _ACDC_
+
+
+module = namedtuple("module", ["var", "cls", "fun"])
 
 
 def parse(src):
     tree = ast.parse(src)
     ast.fix_missing_locations(tree)
     tp = TopParser("<string>", tuple(src.splitlines()))
-    return [tp.visit(c) for c in tree.body]
+    for c in tree.body:
+        if (var := tp.visit(c)) is not None:
+            if var.init is None:
+                LangError.from_code(var, "missing initial value")
+    return module(tp.var, tp.cls, tp.fun)

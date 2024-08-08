@@ -4,7 +4,7 @@ import io
 from dataclasses import dataclass
 from abc import ABC
 from collections.abc import Iterator
-from typing import Self, Iterable, Optional, Union, NoReturn, \
+from typing import Self, Iterable, Optional, Union, \
     get_args, get_origin
 from inspect import isclass
 
@@ -18,21 +18,11 @@ from . import LangError
 
 @dataclass(frozen=True)
 class Code(ABC):
-    def error(self, msg) -> NoReturn:
-        f, a, s = self.__file__, self.__ast__, self.__src__  # pyright: ignore
-        raise LangError(msg, f, a.lineno, a.col_offset, s[a.lineno - 1])
-
     def py(self):
         raise NotImplementedError
 
     @classmethod
     def make(cls, *srcref, **fields) -> Self:
-        for name, base in cls.cls_fields():
-            if (val := fields.get(name, None)) is not None:
-                if isinstance(val, Code):
-                    assert isinstance(val, base)
-                elif isinstance(val, Iterable):
-                    assert all(isinstance(v, base) for v in val)
         obj = cls(**fields)
         if len(srcref) == 1 and isinstance((parent := srcref[0]), Code):
             obj.__dict__["__ast__"] = parent.__ast__    # pyright: ignore
@@ -49,29 +39,13 @@ class Code(ABC):
             raise TypeError(f"unexpected argument: {srcref=}")
         return obj
 
-    @classmethod
-    def cls_fields(cls, only=None, ignore=()) -> Iterator[tuple[str, type]]:
-        if only is None:
-            only = object
-        if not isinstance(only, (tuple, list, set)):
-            only = (only,)
-        if not isinstance(ignore, (tuple, list, set)):
-            ignore = (ignore,)
-        for name, field in cls.__dataclass_fields__.items():
-            ftype = field.type
-            if isclass(ftype):
-                base = ftype
-            elif get_origin(ftype) is tuple:
-                base = get_args(ftype)[0]
-            elif get_origin(ftype) is Union:
-                base = get_args(ftype)[0]
-            else:
-                raise ValueError(f"unknown field type '{cls.__name__}.{name}:"
-                                 f" {ftype}'")
-            if (issubclass(base, ignore)             # pyright: ignore
-                    or not issubclass(base, only)):  # pyright: ignore
-                continue
-            yield name, base
+    def __iter__(self):
+        for name in self.__dataclass_fields__:
+            yield name, getattr(self, name)
+
+    def __call__(self, **fields):
+        f = {n: v for n, v in self} | fields
+        return self.make(self, **f)
 
 
 @dataclass(frozen=True)
@@ -101,7 +75,7 @@ class Expr(Code, ABC):
 
 @dataclass(frozen=True)
 class Const(Expr):
-    val: object
+    val: int
 
     def py(self):
         return repr(self.val)
@@ -161,27 +135,8 @@ class Item(Lookup):
 
 
 @dataclass(frozen=True)
-class Loop(Expr):
-    name: Name
-    iter: Expr
-
-    def py(self):
-        return f"for {self.name.id} in {self.iter.py()}"
-
-
-@dataclass(frozen=True)
-class Comprehension(Expr):
-    expr: Expr
-    loop: Loop
-    cond: Expr
-
-    def py(self):
-        return f"({self.expr.py()} {self.loop.py()} if {self.cond.py()})"
-
-
-@dataclass(frozen=True)
 class Call(Expr):
-    func: Lookup
+    func: str
     args: tuple[Expr, ...]
 
     def py(self):
@@ -242,7 +197,8 @@ class If(Stmt):
 
 @dataclass(frozen=True)
 class For(Stmt):
-    loop: Loop
+    name: Name
+    items: tuple[object, ...]
     body: tuple[Stmt, ...]
 
     def _py(self):
@@ -280,6 +236,31 @@ class Decl(Compound, ABC):
 
 
 @dataclass(frozen=True)
+class Var(Decl):
+    name: str
+    type: object
+    size: Optional[int | str]
+    init: Optional[object]
+
+    def _py(self):
+        yield 0, f"{self.name}: {self.type} = {self.init}"
+
+
+@dataclass(frozen=True)
+class Class(Decl):
+    name: str
+    fields: tuple[Var, ...] = ()
+    parents: tuple[str, ...] = ()
+
+    def _py(self):
+        if self.parents:
+            yield 0, f"class {self.name}({', '.join(self.parents)}):"
+        else:
+            yield 0, f"class {self.name}:"
+        yield from ((i+1, r) for f in self.fields for i, r in f._py())
+
+
+@dataclass(frozen=True)
 class Func(Decl):
     name: str
     args: tuple[str, ...]
@@ -289,34 +270,3 @@ class Func(Decl):
         args = ", ".join(self.args)
         yield 0, f"def {self.name}({args}):"
         yield from ((i+1, r) for s in self.body for i, r in s._py())
-
-
-@dataclass(frozen=True)
-class Var(Decl):
-    name: str
-    type: str
-    size: Optional[int | str]
-    init: Optional[object]
-
-    def _py(self):
-        yield 0, f"{self.name}: {self.type} = {self.init}"
-
-
-@dataclass(frozen=True)
-class Param(Decl):
-    name: str
-    value: int | str
-
-    def _py(self):
-        yield 0, f"{self.name} = {self.value}"
-
-
-@dataclass(frozen=True)
-class Struct(Decl):
-    name: str
-    fields: tuple[Var, ...]
-    parents: tuple[str, ...]
-
-    def _py(self):
-        yield 0, f"class {self.name}:"
-        yield from ((i+1, r) for f in self.fields for i, r in f._py())
