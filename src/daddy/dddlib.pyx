@@ -436,7 +436,7 @@ cdef class domain:
             raise ValueError(f"unsupported 'hom' expression '{expr}'")
 
     cpdef hom const(self, ddd d):
-        """return a contant `hom` that returns `d`
+        """return a constant `hom` that returns `d`
 
         Same as `domain.__call__(":=", ...)` but more general as `d` can be
         a `ddd` that could not be specified as an argument to `__call__`.
@@ -448,7 +448,7 @@ cdef class domain:
 
         Same as `domain.__call__("left op right")` but does not need parsing,
         restricted to `left` being a variable, and `right` being a variable or
-        an integer litteral.
+        an integer literal.
         """
         cdef int val, lft, rgt, i
         cdef list coef
@@ -723,7 +723,7 @@ cdef class ddd:
     and only the `ddd`s from the same domain are compatible with each other.
     """
     def __init__(self):
-        """class `ddd` should never be instanciated directly
+        """class `ddd` should never be instantiated directly
 
         To construct a `ddd` instance, use either:
          - `domain.__call__()` that is the usual method
@@ -1232,7 +1232,7 @@ cdef class hom:
     `ddd`s and `hom`s from the same domain are compatible with each other.
     """
     def __init__(self):
-        """class `hom` should never be instanciated directly
+        """class `hom` should never be instantiated directly
 
         To construct a `hom` instance, use either:
          - `domain.__call__()` that is the usual method
@@ -1393,10 +1393,10 @@ cdef class hom:
             return self.f.makehom(hom_ITE(self.h, then.h, orelse.h))
 
     cpdef hom fixpoint (self):
-        """fixpoint homomorphism
+        """fixed point homomorphism
 
-        `h.fixpoint(d)` is equivalent to compute `d = h(d)` until a fixpoint is
-        reached.
+        `h.fixpoint(d)` is equivalent to compute `d = h(d)` until a fixed point
+        is reached.
 
         Note: this operation is not guaranteed to converge, use `lfp` and `gfp`
         instead to have such a guarantee.
@@ -1404,7 +1404,7 @@ cdef class hom:
         return self.f.makehom(fixpoint(self.h))
 
     cpdef hom lfp (self):
-        """least fixpoint homomorphism
+        """least fixed point homomorphism
 
         This is `(h | id).fixpoint()`, where `id` is the identity homomorphism,
         that is guaranteed to converge. This results in an homomorphism that
@@ -1418,7 +1418,7 @@ cdef class hom:
         return (self | self.f.id).fixpoint()
 
     cpdef hom gfp (self):
-        """greatest fixpoint homomorphism
+        """greatest fixed point homomorphism
 
         This is `(h & id).fixpoint()`, where `id` is the identity homomorphism,
         that is guaranteed to converge. This results in an homomorphism that
@@ -1454,7 +1454,7 @@ cdef class hom:
         return self.f.makehom(self.h.invert(p))
 
     cpdef bint is_selector(self):
-        """chech whether teh homomorphism is a selector
+        """check whether the homomorphism is a selector
 
         A selector is a homomorphism that only selects paths of a `ddd` but
         does not change the valuations and does not add paths.
