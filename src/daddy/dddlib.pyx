@@ -82,6 +82,7 @@ cdef class domain:
      - `ddd empty`: the empty set of valuations
      - `ddd one`: the accepting all node
      - `hom id`: the identity homomorphism
+     - `daddy.expr.Parser parse`: a parser for assignments
     """
     def __cinit__(self, **doms):
         self.vmap = {}
