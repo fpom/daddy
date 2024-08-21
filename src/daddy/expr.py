@@ -5,9 +5,22 @@ from sympy import parse_expr, Symbol
 
 
 class Parser:
+    """a simple parser for assignments
+
+    It parses expression as `x = 2` or `x += y`, with:
+     - a variable at the left-hand side
+     - a linear combination of variables on the right-hand side
+    """
     ops = ("=", "==", "!=", "<=", ">=", "<", ">", "+=")
 
     def __init__(self, *names):
+        """create a parser for a fixed set of names
+
+        Names are arbitrary strings considered as atoms, eg:
+         - regular variable names as `x`, `my_var`, etc.
+         - more complex strings as `x.attr[3]`
+         - or even arbitrary strings as `it's raining`
+        """
         self.n2t = {}
         self.t2n = {}
         self.loc = {}
@@ -32,7 +45,21 @@ class Parser:
         s = m.group(0)
         return self.n2t.get(s, s)
 
-    def __call__(self, src):
+    def __call__(self, src: str) -> tuple[str, str, int | str | tuple[int, dict[str, int]]]:
+        """parse `str` as an assignment
+
+        Takes a string as input and returns either:
+         - `str, str, int` for assignments as `x = 3` in which case it returns
+           `'x', '=', 3`
+         - `str, str, str` for assignments as `x += y` in which case it returns
+           `'x', '+=', 'y'`
+         - `str, str, (int, dict)` for assignments as `x += y + 2*z` in which
+           case it returns `'x', '=', (12, {'x': 1, 'y': 1, 'z': 2})`, where the
+           `int` is the constant added and the `dict` has the coefficients for
+           the linear combination of variables. Note that in this case, the
+           second returned string is always `'='` as `+=` is interpreted by
+           adding `1` to the coefficient of `x` in the returned `dict`.
+        """
         s = self.n.sub(self._get, src)
         m = self.a.match(s)
         if m is None:
@@ -47,7 +74,7 @@ class Parser:
             coef, inc = self._parse_expr(right)
             if op == "+=":
                 coef[left] = 1 + coef.get(left, 0)
-            return left, op, (inc, coef)
+            return left, "=", (inc, coef)
         else:
             raise ValueError(f"invalid expression '{src}' (wrong assignment)")
 

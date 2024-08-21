@@ -429,7 +429,7 @@ cdef class domain:
         left, op, right = self.parse(expr)
         if isinstance(right, (int, str)):
             return self.op(left, op, right)
-        elif op == "=" or op == "+=":
+        elif op == "=" and isinstance(right, tuple):
             inc, coef = right
             return self.assign(left, inc, **coef)
         else:
