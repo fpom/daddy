@@ -33,6 +33,7 @@ cdef class domain:
     cdef readonly int depth
     cdef readonly ddd full, one, empty
     cdef readonly hom id
+    cdef readonly object parse
     cdef DDD _from_set(self, int var, set dom, DDD tail)
     cdef inline ddd makeddd(self, DDD d)
     cdef inline hom makehom(self, Hom h)

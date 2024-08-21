@@ -9,6 +9,8 @@ from subprocess import check_call
 from libcpp cimport bool
 from libcpp.pair cimport pair
 
+from .expr import Parser
+
 cdef extern from "dddwrap.h" namespace "std":
     cdef cppclass ofstream:
         ofstream ()
@@ -21,55 +23,6 @@ cdef extern from "dddwrap.h" namespace "std":
         void close ()
         bool eof ()
     void getline (ifstream& i, string& s)
-
-##
-## syntax
-##
-
-_hom_expr = re.compile(r"^\s*(\w+)\s*(=|==|!=|<=|>=|<|>|\+=)\s*(\w.*?)\s*$", re.I)
-
-def _parse_mul(expr):
-    if len(expr.args) != 2:
-        raise ValueError(f"invalid expression '{expr}' (too many factors)")
-    one, two = expr.args
-    if one.is_Integer and two.is_Symbol:
-        return {str(two): int(one)}
-    elif one.is_Symbol and two.is_Integer:
-        return {str(one): int(two)}
-    else:
-        raise ValueError(f"invalid expression '{expr}' (wrong factors)")
-
-def _parse_sum(expr):
-    pass
-    coef = {}
-    inc = 0
-    for term in expr.args:
-        if term.is_Integer:
-            inc += int(term)
-        elif term.is_Symbol:
-            coef[str(term)] = 1
-        elif term.is_Mul:
-            coef.update(_parse_mul(term))
-        else:
-            raise ValueError(f"invalid expression '{term}' (wrong term)")
-    return coef, inc
-
-def _parse_expr(src):
-    try:
-        expr = sympy.parse_expr(src)
-    except Exception as err:
-        raise ValueError(f"invalid expression {src} ({err})")
-    if expr.is_Integer:
-        return {}, int(expr)
-    elif expr.is_Symbol:
-        return {str(expr): 1}, 0
-    elif expr.func.is_Mul:
-        return _parse_mul(expr), 0
-    elif expr.func.is_Add:
-        return _parse_sum(expr)
-    else:
-        raise ValueError(f"invalid expression {expr}")
-        
 
 ##
 ## domain (aka, factory)
@@ -142,6 +95,7 @@ cdef class domain:
         self.id = hom.__new__(hom)
         self.full.f = self.one.f = self.empty.f = self.id.f = self
         self.id.h = Hom()
+        self.parse = Parser(*doms.keys())
 
     def __init__(self, **doms):
         """initialise a `domain` by defining the variables and their domains
@@ -468,21 +422,15 @@ cdef class domain:
 
     cdef hom _call_hom(self, str expr):
         "auxiliary method for `__call__`"
-        cdef str left, op, right, var
+        cdef str left, op
+        cdef object right
         cdef int inc
         cdef dict coef
-        cdef object match = _hom_expr.match(expr)
-        if match is None:
-            raise ValueError(f"invalid 'hom' expression '{expr}'")
-        left, op, right = match.groups()
-        if right.isnumeric():
-            return self.op(left, op, int(right))
-        elif right in self.vmap:
+        left, op, right = self.parse(expr)
+        if isinstance(right, (int, str)):
             return self.op(left, op, right)
         elif op == "=" or op == "+=":
-            coef, inc = _parse_expr(right)
-            if op == "+=":
-                coef[left] = 1 + coef.get(left, 0)
+            inc, coef = right
             return self.assign(left, inc, **coef)
         else:
             raise ValueError(f"unsupported 'hom' expression '{expr}'")
