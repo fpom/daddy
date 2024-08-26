@@ -5,38 +5,10 @@ from itertools import chain
 from dataclasses import dataclass
 from collections import namedtuple
 from contextlib import contextmanager
-from inspect import isclass
 
 from . import LangError
 from .lang import Const, Name, Op, Lookup, Call, BareCall, Attr, Item, \
     Assign, If, For, Func, Return, Var, Class, Pass
-
-
-class ACDC:
-    _known = {}
-    _decl = Class("_ACDC_")
-
-    @classmethod
-    def make(cls, value):
-        if isinstance(value, cls):
-            return cls
-        value = dict(value)
-        fields = {}
-        for f in cls._decl.fields:
-            val = value[f.name]
-            if f.size is not None and f.size != len(val):
-                raise ValueError("wrong length")
-            if issubclass(f.type, ACDC):
-                if f.size is None:
-                    fields[f.name] = f.type.make(val)
-                else:
-                    fields[f.name] = [f.type.make(v) for v in val]
-            else:
-                if f.size is None:
-                    fields[f.name] = f.type(val)
-                else:
-                    fields[f.name] = [f.type(v) for v in val]
-        return cls(**fields)
 
 
 class NodeTransformer(ast.NodeTransformer):
@@ -70,34 +42,27 @@ class NodeTransformer(ast.NodeTransformer):
                 ret = loc[name]
         except Exception as err:
             self.error(f"not static expression ({err})", node)
-        return self._dc2d(ret)
+        return ret
 
-    def _dc2d(self, obj):
-        if hasattr(obj, "__dataclass_fields__") and \
-                (cname := obj.__class__.__name__) in self.env and \
-                isinstance(obj, self.env[cname]):
-            return {k: self._dc2d(getattr(obj, k))
-                    for k in obj.__dataclass_fields__}
-        else:
-            return obj
-
-    def visit(self, node):
-        code = super().visit(node)
-        # insert __ast__ into object to keep track of original source code
-        try:
-            # may fail in TopParser for variables initialisations
+    def _attr(self, code, node):
+        if code is not None:
+            # keep track of original source code
             code.__dict__["__ast__"] = node
             code.__dict__["__src__"] = self.src
             code.__dict__["__file__"] = self.fname
-        except Exception:
-            pass
         return code
+
+    def visit(self, node):
+        return self._attr(super().visit(node), node)
 
     def generic_visit(self, node):
         self.error("unsupported syntax", node)
 
     def visit_Name(self, node):
-        return Name(node.id)
+        if isinstance((val := self.env.get(node.id, None)), int):
+            return Const(val)
+        else:
+            return Name(node.id)
 
 
 class CodeParser(NodeTransformer):
@@ -237,7 +202,8 @@ class CodeParser(NodeTransformer):
                                                    ctx=ast.Load()),
                                      args=[node.iter]))
         return For(name=self.visit(node.target),
-                   items=tuple(items),
+                   items=tuple(self._attr(Const(val=i), node.iter)
+                               for i in items),
                    body=tuple(self.visit(s) for s in node.body))
 
     def visit_Return(self, node):
@@ -246,7 +212,7 @@ class CodeParser(NodeTransformer):
         else:
             return Return(self.visit(node.value))
 
-    def visit_Pass(self, node):
+    def visit_Pass(self, _):
         return Pass()
 
     def visit_AnnAssign(self, node):
@@ -270,10 +236,11 @@ class TopParser(NodeTransformer):
         self.fun = {}
 
     @contextmanager
-    def newdecl(self):
+    def newscope(self):
         decl, self.decl = self.decl, {}
+        var, self.var = self.var, {}
         yield
-        self.decl = decl
+        self.decl, self.var = decl, var
 
     def visit_AnnAssign(self, node):
         if not isinstance(node.target, ast.Name):
@@ -281,15 +248,23 @@ class TopParser(NodeTransformer):
         if (lno := self.decl.get(node.target.id, None)) is not None:
             self.error(f"already declared line {lno}", node)
         self.decl[node.target.id] = node.lineno
+        if node.value is None:
+            init = None
+        else:
+            init = self.static(node.value)
         if isinstance(node.annotation, ast.Subscript):
             if not isinstance(node.annotation.value, ast.Name):
                 self.error("unsupported type", node.annotation.value)
-            typ_ = node.annotation.value.id
-            if not isinstance(node.annotation.slice, (ast.Name, ast.Constant)):
-                self.error("unsupported size", node.annotation.slice)
-            size = self.static(node.annotation.slice)
-            if not isinstance(size, int):
-                self.error("invalid size", node.annotation.slice)
+            if not isinstance(node.annotation.slice, ast.Name):
+                self.error("unsupported items type", node.annotation.slice)
+            if init is None:
+                self.error("missing initial value", node)
+            typ_ = node.annotation.slice.id
+            try:
+                init = tuple(init)
+            except Exception:
+                self.error("cannot iterate over init value", node.value)
+            size = len(init)
         elif isinstance(node.annotation, ast.Name):
             typ_ = node.annotation.id
             size = None
@@ -301,12 +276,7 @@ class TopParser(NodeTransformer):
             typ_ = self.env[typ_]
         else:
             self.error("unsupported type", node.annotation)
-        if node.value is None:
-            init = None
-        else:
-            # TODO: check type here instead of in static
-            init = self.static(node.value)
-        var = Var(node.target.id, typ_, size, init)
+        var = self._attr(Var(node.target.id, typ_, size, init), node)
         self.var[var.name] = var
         return var
 
@@ -341,11 +311,59 @@ class TopParser(NodeTransformer):
                        (node.args.kw_defaults or node.args.defaults)[0])
         args = tuple(a.arg for a in chain(node.args.posonlyargs,
                                           node.args.args))
+        body, glob, loca = [], [], []
+        for child in node.body:
+            if isinstance(child, ast.Global):
+                if body:
+                    self.error("must come before statements", child)
+                elif loca:
+                    self.error("must come before local declarations", child)
+                for n in child.names:
+                    if n in args:
+                        self.error(f"'{n}' declared as argument", child)
+                    if (d := self.var.get(n, None)) is None:
+                        self.error(f"undeclared variable {n}", child)
+                    else:
+                        glob.append(d)
+            elif isinstance(child, ast.AnnAssign):
+                if body:
+                    self.error("must come before statements", child)
+                with self.newscope():
+                    var = self.visit(child)
+                if var.name in args:
+                    self.error(f"'{var.name}' is an argument", child)
+                if any(var.name == g.name for g in glob):
+                    self.error(f"'{var.name}' is declared global", child)
+                if var.init is None:
+                    self.error("missing initial value", child)
+                loca.append(var)
+            else:
+                body.append(self.parser.visit(child))
         self.env[node.name] = self.static(node, node.name)
-        self.fun[node.name] = Func(node.name,
-                                   args,
-                                   tuple(self.parser.visit(child)
-                                         for child in node.body))
+        self.fun[node.name] = self._attr(Func(node.name,
+                                              args,
+                                              tuple(body),
+                                              tuple(glob),
+                                              tuple(loca)),
+                                         node)
+
+    def visit_ImportFrom(self, node):
+        for alias in node.names:
+            if alias.name == "*":
+                self.error("unsupported '*'-import", alias)
+            if alias.asname:
+                name = alias.asname
+            else:
+                name = alias.name
+            self.env[alias.name] = self.static(node, name)
+
+    def visit_Import(self, node):
+        for alias in node.names:
+            if alias.asname:
+                name = alias.asname
+            else:
+                name = alias.name
+            self.env[alias.name] = self.static(node, name)
 
     def visit_ClassDef(self, node):
         if (lno := self.decl.get(node.name, None)) is not None:
@@ -353,27 +371,28 @@ class TopParser(NodeTransformer):
         self.decl[node.name] = node.lineno
         if node.keywords:
             self.error("unsupported syntax", node.keywords[0])
+        for deco in node.decorator_list:
+            if not isinstance(deco, ast.Name) or deco.id != "dataclass":
+                self.error("unsupported decorator", deco)
         parents = []
         for b in node.bases:
             if not isinstance(b, ast.Name):
                 self.error("expected name", b)
             parents.append(b.id)
-        with self.newdecl():
+        with self.newscope():
             fields = []
             for s in node.body:
                 v = self.visit(s)
                 if not isinstance(v, Var):
                     self.error("expected field", s)
                 fields.append(v)
-        c = Class(node.name, tuple(fields), tuple(parents))
-        self.env[node.name] = self._dataclass(self.static(node, node.name), c)
-        self.cls[c.name] = c
-
-    def _dataclass(self, cls, decl):
-        class _ACDC_(dataclass(cls), ACDC):
-            _known = {n: self.env[n] for n in self.cls}
-            _decl = decl
-        return _ACDC_
+        cls = self._attr(Class(node.name,
+                         dataclass(self.static(node, node.name)),
+                         tuple(fields),
+                         tuple(parents)),
+                         node)
+        self.env[node.name] = cls.cls
+        self.cls[cls.name] = cls
 
 
 module = namedtuple("module", ["var", "cls", "fun"])
