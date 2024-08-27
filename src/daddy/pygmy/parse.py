@@ -8,7 +8,52 @@ from contextlib import contextmanager
 
 from . import LangError
 from .lang import Const, Name, Op, Lookup, Call, BareCall, Attr, Item, \
-    Assign, If, For, Func, Return, Var, Class, Pass
+    Assign, If, Func, Return, Var, Class, Pass, Block
+
+
+class ForBinder(ast.NodeTransformer):
+    def __init__(self, name, value, fname, src):
+        self.name = name
+        self.value = ast.Constant(value)
+        self.fname = fname
+        self.src = src
+
+    def generic_visit(self, node):
+        init = {}
+        # adapted from ast.NodeTransformer.generic_visit
+        for field, old_value in ast.iter_fields(node):
+            if isinstance(old_value, list):
+                new_values = []
+                for value in old_value:
+                    if isinstance(value, ast.AST):
+                        value = self.visit(value)
+                        if value is None:
+                            continue
+                        elif not isinstance(value, ast.AST):
+                            new_values.extend(value)
+                            continue
+                    new_values.append(value)
+                init[field] = new_values
+            elif isinstance(old_value, ast.AST):
+                new_node = self.visit(old_value)
+                if new_node is not None:
+                    init[field] = new_node
+            else:
+                init[field] = old_value
+        new = node.__class__(**init)
+        ast.copy_location(node, new)
+        return new
+
+    def visit_Name(self, node):
+        if node.id == self.name:
+            if isinstance(node.ctx, ast.Store):
+                raise LangError("cannot assign for-loop index",
+                                self.fname,
+                                node.lineno,
+                                node.col_offset,
+                                self.src[node.lineno - 1])
+            return self.generic_visit(self.value)
+        return self.generic_visit(node)
 
 
 class NodeTransformer(ast.NodeTransformer):
@@ -189,22 +234,34 @@ class CodeParser(NodeTransformer):
         return Assign(target, self.visit(node.value), op)
 
     def visit_If(self, node):
-        return If(self.visit(node.test),
-                  tuple(self.visit(s) for s in node.body),
-                  tuple(self.visit(s) for s in node.orelse))
+        try:
+            cond = self.static(node.test)
+        except Exception:
+            cond = self
+        if cond is self:
+            return If(self.visit(node.test),
+                      self._attr(Block(self.visit(s) for s in node.body),
+                                 node),
+                      self._attr(Block(self.visit(s) for s in node.orelse),
+                                 node))
+        elif cond:
+            return Block(self.visit(s) for s in node.body)
+        else:
+            return Block(self.visit(s) for s in node.orelse)
 
     def visit_For(self, node):
         if not isinstance(node.target, ast.Name):
             self.error("unsupported iterator", node.target)
         if node.orelse:
             self.error("unsupported 'else' in for loop", node)
-        items = self.static(ast.Call(func=ast.Name(id="list",
-                                                   ctx=ast.Load()),
-                                     args=[node.iter]))
-        return For(name=self.visit(node.target),
-                   items=tuple(self._attr(Const(val=i), node.iter)
-                               for i in items),
-                   body=tuple(self.visit(s) for s in node.body))
+        body = []
+        for val in self.static(node.iter):
+            bind = ForBinder(node.target.id, val, self.fname, self.src)
+            for child in node.body:
+                bound = bind.visit(child)
+                assert bound is not child
+                body.append(self.visit(bound))
+        return Block(body)
 
     def visit_Return(self, node):
         if node.value is None:
@@ -342,7 +399,7 @@ class TopParser(NodeTransformer):
         self.env[node.name] = self.static(node, node.name)
         self.fun[node.name] = self._attr(Func(node.name,
                                               args,
-                                              tuple(body),
+                                              self._attr(Block(body), node),
                                               tuple(glob),
                                               tuple(loca)),
                                          node)

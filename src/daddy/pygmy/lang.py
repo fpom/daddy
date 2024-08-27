@@ -1,9 +1,9 @@
 import ast
 import io
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, InitVar
 from abc import ABC
-from typing import Self, Optional
+from typing import Self, Optional, Iterable
 
 from . import LangError
 
@@ -37,17 +37,18 @@ class Code(ABC):
             raise TypeError(f"unexpected arguments: {srcref=}")
         return obj
 
-    def __iter__(self):
-        for name in self.__dataclass_fields__:
-            yield name, getattr(self, name)
+    def fields(self):
+        for f in fields(self):
+            yield f.name, getattr(self, f.name)
 
     def __call__(self, **fields) -> Self:
-        f = {n: v for n, v in self} | fields
+        f = {n: v for n, v in self.fields()} | fields
         return self.make(self, **f)
 
     def subst(self, nmap):
         init = {}
-        for name, value in self:
+        for pair in self.fields():
+            name, value = pair
             if value is None:
                 init[name] = None
             elif isinstance(value, Code):
@@ -201,6 +202,33 @@ class Stmt(Compound, ABC):
 
 
 @dataclass(frozen=True)
+class Block(Stmt):
+    body: tuple[Stmt, ...]
+
+    def __post_init__(self):
+        self.__dict__["body"] = tuple(self._flatten(tuple(self.body)))
+
+    def _flatten(self, obj):
+        if isinstance(obj, (Block, tuple, list)):
+            for item in obj:
+                yield from self._flatten(item)
+        else:
+            yield obj
+
+    def __iter__(self):
+        yield from self.body
+
+    def __add__(self, other):
+        return Block.make(self, body=(self.body + tuple(other)))
+
+    def __bool__(self):
+        return bool(self.body)
+
+    def __getitem__(self, index):
+        return self.body[index]
+
+
+@dataclass(frozen=True)
 class Pass(Stmt):
     def _py(self):
         yield 0, "pass"
@@ -234,8 +262,8 @@ class Assign(Stmt):
 @dataclass(frozen=True)
 class If(Stmt):
     cond: Expr
-    then: tuple[Stmt, ...]
-    orelse: tuple[Stmt, ...]
+    then: Block
+    orelse: Block
 
     def _py(self):
         if not (self.then or self.orelse):
@@ -254,21 +282,13 @@ class If(Stmt):
             yield from ((i+1, r) for s in self.orelse for i, r in s._py())
 
     def inline(self, ret, op, defs, stack):
-        yield self(then=tuple(s for stmt in self.then
-                              for s in stmt.inline(ret, op, defs, stack)),
-                   orelse=tuple(s for stmt in self.orelse
-                                for s in stmt.inline(ret, op, defs, stack)))
-
-
-@dataclass(frozen=True)
-class For(Stmt):
-    name: Name
-    items: tuple[Const, ...]
-    body: tuple[Stmt, ...]
-
-    def _py(self):
-        yield 0, f"for {self.name.py()} in {self.items!r}:"
-        yield from ((i+1, r) for s in self.body for i, r in s._py())
+        t = Block.make(self.then,
+                       body=(s for stmt in self.then
+                             for s in stmt.inline(ret, op, defs, stack)))
+        e = Block.make(self.orelse,
+                       body=(s for stmt in self.orelse
+                             for s in stmt.inline(ret, op, defs, stack)))
+        yield self(then=t, orelse=e)
 
 
 @dataclass(frozen=True)
@@ -343,7 +363,7 @@ class Class(Decl):
 class Func(Decl):
     name: str
     args: tuple[str, ...]
-    body: tuple[Stmt, ...]
+    body: Block
     globals: tuple[Var, ...]
     locals: tuple[Var, ...]
 
@@ -361,11 +381,11 @@ class Func(Decl):
                     and self._isret(block[-1].orelse)
         return False
 
-    def _makeret(self, statements):
-        block = []
-        for pos, stmt in enumerate(statements):
+    def _makeret(self, block):
+        body = []
+        for pos, stmt in enumerate(block):
             if isinstance(stmt, Return):
-                block.append(stmt)
+                body.append(stmt)
                 break
             elif isinstance(stmt, If):
                 stmt = stmt(then=self._makeret(stmt.then),
@@ -373,46 +393,31 @@ class Func(Decl):
                 if stmt.then and isinstance(stmt.then[-1], Return):
                     if stmt.orelse and isinstance(stmt.orelse[-1], Return):
                         # if / ... return / else ... return
-                        block.append(stmt)
+                        body.append(stmt)
                         break
                     else:
                         # if / ... return / else ...
                         stmt = stmt(orelse=stmt.orelse
-                                    + self._makeret(statements[pos+1:]))
+                                    + self._makeret(block[pos+1:]))
                         if not self._isret(stmt.orelse):
                             LangError.from_code(stmt, "missing return in else")
-                        block.append(stmt)
+                        body.append(stmt)
                         break
                 else:
                     if stmt.orelse and isinstance(stmt.orelse[-1], Return):
                         # if / ... / else ... return
                         stmt = stmt(then=stmt.then
-                                    + self._makeret(statements[pos+1:]))
+                                    + self._makeret(block[pos+1:]))
                         if not self._isret(stmt.then):
                             LangError.from_code(stmt, "missing return in then")
-                        block.append(stmt)
+                        body.append(stmt)
                         break
                     else:
                         # if / ... / else ...
-                        block.append(stmt)
+                        body.append(stmt)
             else:
-                block.append(stmt)
-        return tuple(block)
-
-    def _unroll(self, statements):
-        block = []
-        for stmt in statements:
-            if isinstance(stmt, If):
-                block.append(stmt(then=self._unroll(stmt.then),
-                                  orelse=self._unroll(stmt.orelse)))
-            elif isinstance(stmt, For):
-                for val in stmt.items:
-                    nmap = {stmt.name.id: val}
-                    block.extend(self._unroll(child.bind(nmap)
-                                              for child in stmt.body))
-            else:
-                block.append(stmt)
-        return tuple(block)
+                body.append(stmt)
+        return Block.make(block, body=body)
 
     def call(self, args, ret, op, defs, stack=[]):
         if len(args) != len(self.args):
@@ -423,6 +428,6 @@ class Func(Decl):
         nmap = {p: a for p, a in zip(self.args, args)}
         scope = {n.name: Name.make(n, id=f"{self.name}_{n.name}")
                  for n in self.locals}
-        for stmt in self._makeret(self._unroll(self.body)):
+        for stmt in self._makeret(self.body):
             bound = stmt.subst(scope).bind(nmap)
             yield from bound.inline(ret, op, defs, stack + [self.name])
