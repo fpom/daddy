@@ -1,9 +1,9 @@
 import ast
 import io
 
-from dataclasses import dataclass, fields, InitVar
+from dataclasses import dataclass, fields
 from abc import ABC
-from typing import Self, Optional, Iterable
+from typing import Self, Optional
 
 from . import LangError
 
@@ -68,10 +68,10 @@ class Code(ABC):
 class Compound(Code, ABC):
     def py(self, prefix=""):
         out = io.StringIO()
-        for indent, line in self._py():
+        for indent, *line in self._py():
             out.write(prefix)
             out.write("    " * indent)
-            out.write(line)
+            out.write(" ".join(line))
             out.write("\n")
         return out.getvalue()
 
@@ -270,16 +270,16 @@ class If(Stmt):
             return
         if self.then:
             yield 0, f"if {self.cond.py()}:"
-            yield from ((i+1, r) for s in self.then for i, r in s._py())
+            yield from ((i+1, *r) for s in self.then for i, *r in s._py())
             if self.orelse:
                 yield 0, "else:"
-                yield from ((i+1, r) for s in self.orelse for i, r in s._py())
+                yield from ((i+1, *r) for s in self.orelse for i, *r in s._py())
         elif self.orelse:
             if isinstance(self.cond, Op):
                 yield 0, f"if not ({self.cond.py()}):"
             else:
                 yield 0, f"if not {self.cond.py()}:"
-            yield from ((i+1, r) for s in self.orelse for i, r in s._py())
+            yield from ((i+1, *r) for s in self.orelse for i, *r in s._py())
 
     def inline(self, ret, op, defs, stack):
         t = Block.make(self.then,
@@ -336,12 +336,12 @@ class Decl(Compound, ABC):
 @dataclass(frozen=True)
 class Var(Decl):
     name: str
-    type: object
+    type: type
     size: Optional[int | str]
     init: Optional[object]
 
     def _py(self):
-        yield 0, f"{self.name}: {self.type} = {self.init}"
+        yield 0, f"{self.name}: {self.type.__name__} = {self.init}"
 
 
 @dataclass(frozen=True)
@@ -352,11 +352,12 @@ class Class(Decl):
     parents: tuple[str, ...] = ()
 
     def _py(self):
+        yield 0, "@dataclass"
         if self.parents:
             yield 0, f"class {self.name}({', '.join(self.parents)}):"
         else:
             yield 0, f"class {self.name}:"
-        yield from ((i+1, r) for f in self.fields for i, r in f._py())
+        yield from ((i+1, *r) for f in self.fields for i, *r in f._py())
 
 
 @dataclass(frozen=True)
@@ -370,7 +371,10 @@ class Func(Decl):
     def _py(self):
         args = ", ".join(self.args)
         yield 0, f"def {self.name}({args}):"
-        yield from ((i+1, r) for s in self.body for i, r in s._py())
+        if self.globals:
+            yield 1, "global", ", ".join(v.name for v in self.globals)
+        yield from ((i+1, *r) for v in self.locals for i, *r in v._py())
+        yield from ((i+1, *r) for s in self.body for i, *r in s._py())
 
     def _isret(self, block):
         if block:
@@ -431,3 +435,30 @@ class Func(Decl):
         for stmt in self._makeret(self.body):
             bound = stmt.subst(scope).bind(nmap)
             yield from bound.inline(ret, op, defs, stack + [self.name])
+
+
+#
+# module
+#
+
+@dataclass(frozen=True)
+class Module(Compound):
+    var: dict[str, Var]
+    cls: dict[str, Class]
+    fun: dict[str, Func]
+
+    def __post_init__(self):
+        d = self.__dict__["all"] = {}
+        for _, decl in self.fields():
+            d.update(decl)
+
+    def _py(self):
+        yield 0, "from dataclasses import dataclass"
+        for decl, sep in [(self.cls, True),
+                          (self.var, False),
+                          (self.fun, True)]:
+            yield 0, ""
+            for n, d in enumerate(decl.values()):
+                if n and sep:
+                    yield 0, ""
+                yield from d._py()
