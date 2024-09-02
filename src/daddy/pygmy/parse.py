@@ -40,7 +40,7 @@ class ForBinder(ast.NodeTransformer):
             else:
                 init[field] = old_value
         new = node.__class__(**init)
-        ast.copy_location(node, new)
+        ast.copy_location(new, node)
         return new
 
     def visit_Name(self, node):
@@ -197,7 +197,7 @@ class CodeParser(NodeTransformer):
         return Call(node.func.id, tuple(self.visit(a) for a in node.args))
 
     def visit_Expr(self, node):
-        assert isinstance(node.value, ast.Call), "unsupported bare expressions"
+        assert isinstance(node.value, ast.Call), "unsupported bare expression"
         return BareCall(self.visit(node.value))
 
     def visit_Attribute(self, node):
@@ -318,12 +318,8 @@ class TopParser(NodeTransformer):
             size = None
         else:
             self.error("unsupported type", node.annotation)
-        if typ_ in ("int", "bool"):
-            typ_ = int
-        elif typ_ in self.cls:
-            typ_ = self.env[typ_]
-        else:
-            self.error("unsupported type", node.annotation)
+        assert typ_ in self.cls or typ_ in ("int", "bool"), \
+            ("unsupported type", node.annotation)
         var = self._attr(Var(node.target.id, typ_, size, init), node)
         self.var[var.name] = var
         return var

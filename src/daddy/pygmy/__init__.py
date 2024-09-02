@@ -1,3 +1,5 @@
+import ast
+
 from typing import NoReturn
 
 

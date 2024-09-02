@@ -130,6 +130,8 @@ class Name(Lookup):
         if (val := nmap.get(self.id, None)) is not None:
             if isinstance(val, int):
                 return Const.make(self, val=val)
+            elif isinstance(val, str):
+                return self(id=val)
             elif isinstance(val, Code):
                 return val
             else:
@@ -336,12 +338,12 @@ class Decl(Compound, ABC):
 @dataclass(frozen=True)
 class Var(Decl):
     name: str
-    type: type
+    type: str
     size: Optional[int | str]
     init: Optional[object]
 
     def _py(self):
-        yield 0, f"{self.name}: {self.type.__name__} = {self.init}"
+        yield 0, f"{self.name}: {self.type} = {self.init}"
 
 
 @dataclass(frozen=True)
@@ -453,12 +455,15 @@ class Module(Compound):
             d.update(decl)
 
     def _py(self):
+        def lno(obj):
+            return obj.__ast__.lineno
         yield 0, "from dataclasses import dataclass"
         for decl, sep in [(self.cls, True),
                           (self.var, False),
                           (self.fun, True)]:
-            yield 0, ""
-            for n, d in enumerate(decl.values()):
-                if n and sep:
-                    yield 0, ""
-                yield from d._py()
+            if decl:
+                yield 0, ""
+                for n, d in enumerate(sorted(decl.values(), key=lno)):
+                    if n and sep:
+                        yield 0, ""
+                    yield from d._py()
