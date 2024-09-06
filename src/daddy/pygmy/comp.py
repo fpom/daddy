@@ -18,16 +18,12 @@ class Visitor:
 
     def generic_visit(self, node, **args):
         if isinstance(node, Code):
-            for _, child in node.fields():
+            for _, child in node.iterfields():
                 self.visit(child, **args)
-
-    # module
 
     # def visit_Module(self, node, **args):
     #     pass
-
-    # declarations
-
+    #
     # def visit_Var(self, node, **args):
     #     pass
     #
@@ -36,9 +32,7 @@ class Visitor:
     #
     # def visit_Func(self, node, **args):
     #     pass
-
-    # statements
-
+    #
     # def visit_Pass(self, node, **args):
     #     pass
     #
@@ -53,9 +47,7 @@ class Visitor:
     #
     # def visit_Return(self, node, **args):
     #     pass
-
-    # expressions
-
+    #
     # def visit_Const(self, node, **args):
     #     pass
     #
@@ -77,6 +69,7 @@ class Visitor:
 
 class NameCheck(Visitor):
     "check that names are correctly loaded/assigned"
+
     def __call__(self, mod):
         for fun in mod.fun.values():
             self.visit(fun)
@@ -116,12 +109,11 @@ class GetFunctions(Visitor):
             s = "->".join(stack) + f"=>{node.func}"
             LangError.from_code(node, f"forbidden recursive call: {s}")
         if node.func not in mod.fun:
-            LangError.from_code(node, f"function not defined")
+            LangError.from_code(node, "function not defined")
         calls.add(node.func)
-        self.generic_visit(mod.fun[node.func],
-                           mod=mod,
-                           calls=calls,
-                           stack=stack + [node.func])
+        self.generic_visit(
+            mod.fun[node.func], mod=mod, calls=calls, stack=stack + [node.func]
+        )
 
     def visit_Op(self, node, mod, calls, stack):
         self.generic_visit(node, mod=mod, calls=calls, stack=stack + [None])
@@ -147,7 +139,7 @@ def scope(mod: Module, functions: Iterable[str] = []) -> Module:
             g.append(v)
             if v.type in mod.cls:
                 cls[v.type] = mod.cls[v.type]
-        fun[fname] = f(locals=(),
-                       globals=tuple(g),
-                       body=tuple(b.subst(s) for b in f.body))
+        fun[fname] = f(
+            locals=(), globals=tuple(g), body=tuple(b.subst(s) for b in f.body)
+        )
     return Module(var=var, cls=cls, fun=fun)

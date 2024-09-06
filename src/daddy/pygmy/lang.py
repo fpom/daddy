@@ -3,7 +3,7 @@ import io
 
 from dataclasses import dataclass, fields
 from abc import ABC
-from typing import Self, Optional
+from typing import Self, Optional, Any
 
 from . import LangError
 
@@ -21,13 +21,15 @@ class Code(ABC):
     def make(cls, *srcref, **fields) -> Self:
         obj = cls(**fields)
         if len(srcref) == 1 and isinstance((parent := srcref[0]), Code):
-            obj.__dict__["__ast__"] = parent.__ast__    # pyright: ignore
-            obj.__dict__["__src__"] = parent.__src__    # pyright: ignore
-            obj.__dict__["__file__"] = parent.__file__  # pyright: ignore
-        elif (len(srcref) == 3
-              and isinstance((_ast := srcref[0]), ast.AST)
-              and isinstance((_src := srcref[1]), tuple)
-              and isinstance((_file := srcref[2]), str)):
+            obj.__dict__["__ast__"] = parent.__ast__  # type: ignore
+            obj.__dict__["__src__"] = parent.__src__  # type: ignore
+            obj.__dict__["__file__"] = parent.__file__  # type: ignore
+        elif (
+            len(srcref) == 3
+            and isinstance((_ast := srcref[0]), ast.AST)
+            and isinstance((_src := srcref[1]), tuple)
+            and isinstance((_file := srcref[2]), str)
+        ):
             obj.__dict__["__ast__"] = _ast
             obj.__dict__["__src__"] = _src
             obj.__dict__["__file__"] = _file
@@ -37,30 +39,28 @@ class Code(ABC):
             raise TypeError(f"unexpected arguments: {srcref=}")
         return obj
 
-    def fields(self):
+    def iterfields(self):
         for f in fields(self):
             yield f.name, getattr(self, f.name)
 
     def __call__(self, **fields) -> Self:
-        f = {n: v for n, v in self.fields()} | fields
+        f = {n: v for n, v in self.iterfields()} | fields
         return self.make(self, **f)
 
-    def subst(self, nmap):
-        init = {}
-        for pair in self.fields():
-            name, value = pair
+    def subst(self, nmap) -> Any:
+        init: dict[str, Any] = {}
+        for name, value in self.iterfields():
             if value is None:
                 init[name] = None
             elif isinstance(value, Code):
                 init[name] = value.subst(nmap)
-            elif isinstance(value, tuple) and \
-                    value and isinstance(value[0], Code):
+            elif isinstance(value, tuple) and value and isinstance(value[0], Code):
                 init[name] = tuple(v.subst(nmap) for v in value)
             else:
                 init[name] = value
         return self.make(self, **init)
 
-    def bind(self, nmap):
+    def bind(self, nmap) -> Any:
         return self.subst(nmap)
 
 
@@ -109,8 +109,10 @@ class Op(Expr):
                 child = f"({child})"
             return f"{self.op} {child}"
         else:
-            return f" {self.op} ".join(f"({c.py()})" if isinstance(c, Op)
-                                       else f"{c.py()}" for c in self.children)
+            return f" {self.op} ".join(
+                f"({c.py()})" if isinstance(c, Op) else f"{c.py()}"
+                for c in self.children
+            )
 
 
 @dataclass(frozen=True)
@@ -157,9 +159,7 @@ class Attr(Lookup):
             return f"{self.value.py()}.{self.attr}"
 
     def bind(self, nmap, lvalue=True):
-        return self.make(self,
-                         value=self.value.bind(nmap, lvalue),
-                         attr=self.attr)
+        return self.make(self, value=self.value.bind(nmap, lvalue), attr=self.attr)
 
 
 @dataclass(frozen=True)
@@ -173,10 +173,10 @@ class Item(Lookup):
         else:
             return f"{self.value.py()}[{self.item.py()}]"
 
-    def bind(self, env, lvalue=False):
-        return self.make(self,
-                         value=self.value.bind(env, lvalue),
-                         item=self.item.bind(env))
+    def bind(self, nmap, lvalue=False):
+        return self.make(
+            self, value=self.value.bind(nmap, lvalue), item=self.item.bind(nmap)
+        )
 
 
 @dataclass(frozen=True)
@@ -249,10 +249,12 @@ class Assign(Stmt):
         yield 0, f"{self.target.py()} {self.op or ''}= {self.value.py()}"
 
     def bind(self, nmap):
-        return self.make(self,
-                         target=self.target.bind(nmap, True),
-                         value=self.value.bind(nmap),
-                         op=self.op)
+        return self.make(
+            self,
+            target=self.target.bind(nmap, True),
+            value=self.value.bind(nmap),
+            op=self.op,
+        )
 
     def inline(self, ret, op, defs, stack):
         if isinstance(self.value, Call):
@@ -272,24 +274,26 @@ class If(Stmt):
             return
         if self.then:
             yield 0, f"if {self.cond.py()}:"
-            yield from ((i+1, *r) for s in self.then for i, *r in s._py())
+            yield from ((i + 1, *r) for s in self.then for i, *r in s._py())
             if self.orelse:
                 yield 0, "else:"
-                yield from ((i+1, *r) for s in self.orelse for i, *r in s._py())
+                yield from ((i + 1, *r) for s in self.orelse for i, *r in s._py())
         elif self.orelse:
             if isinstance(self.cond, Op):
                 yield 0, f"if not ({self.cond.py()}):"
             else:
                 yield 0, f"if not {self.cond.py()}:"
-            yield from ((i+1, *r) for s in self.orelse for i, *r in s._py())
+            yield from ((i + 1, *r) for s in self.orelse for i, *r in s._py())
 
     def inline(self, ret, op, defs, stack):
-        t = Block.make(self.then,
-                       body=(s for stmt in self.then
-                             for s in stmt.inline(ret, op, defs, stack)))
-        e = Block.make(self.orelse,
-                       body=(s for stmt in self.orelse
-                             for s in stmt.inline(ret, op, defs, stack)))
+        t = Block.make(
+            self.then,
+            body=(s for stmt in self.then for s in stmt.inline(ret, op, defs, stack)),
+        )
+        e = Block.make(
+            self.orelse,
+            body=(s for stmt in self.orelse for s in stmt.inline(ret, op, defs, stack)),
+        )
         yield self(then=t, orelse=e)
 
 
@@ -307,9 +311,9 @@ class Return(Stmt):
         if ret is None and self.value is None:
             pass
         elif ret is not None and self.value is None:
-            LangError.from_code(self, f"cannot assign bare return")
+            LangError.from_code(self, "cannot assign bare return")
         elif ret is None and self.value is not None:
-            LangError.from_code(self, f"cannot discard return value")
+            LangError.from_code(self, "cannot discard return value")
         else:
             yield Assign.make(self, target=ret, value=self.value, op=op)
 
@@ -359,7 +363,7 @@ class Class(Decl):
             yield 0, f"class {self.name}({', '.join(self.parents)}):"
         else:
             yield 0, f"class {self.name}:"
-        yield from ((i+1, *r) for f in self.fields for i, *r in f._py())
+        yield from ((i + 1, *r) for f in self.fields for i, *r in f._py())
 
 
 @dataclass(frozen=True)
@@ -375,16 +379,15 @@ class Func(Decl):
         yield 0, f"def {self.name}({args}):"
         if self.globals:
             yield 1, "global", ", ".join(v.name for v in self.globals)
-        yield from ((i+1, *r) for v in self.locals for i, *r in v._py())
-        yield from ((i+1, *r) for s in self.body for i, *r in s._py())
+        yield from ((i + 1, *r) for v in self.locals for i, *r in v._py())
+        yield from ((i + 1, *r) for s in self.body for i, *r in s._py())
 
     def _isret(self, block):
         if block:
             if isinstance(block[-1], Return):
                 return True
             elif isinstance(block[-1], If):
-                return self._isret(block[-1].then) \
-                    and self._isret(block[-1].orelse)
+                return self._isret(block[-1].then) and self._isret(block[-1].orelse)
         return False
 
     def _makeret(self, block):
@@ -394,8 +397,9 @@ class Func(Decl):
                 body.append(stmt)
                 break
             elif isinstance(stmt, If):
-                stmt = stmt(then=self._makeret(stmt.then),
-                            orelse=self._makeret(stmt.orelse))
+                stmt = stmt(
+                    then=self._makeret(stmt.then), orelse=self._makeret(stmt.orelse)
+                )
                 if stmt.then and isinstance(stmt.then[-1], Return):
                     if stmt.orelse and isinstance(stmt.orelse[-1], Return):
                         # if / ... return / else ... return
@@ -403,8 +407,9 @@ class Func(Decl):
                         break
                     else:
                         # if / ... return / else ...
-                        stmt = stmt(orelse=stmt.orelse
-                                    + self._makeret(block[pos+1:]))
+                        stmt = stmt(
+                            orelse=stmt.orelse + self._makeret(block[pos + 1 :])
+                        )
                         if not self._isret(stmt.orelse):
                             LangError.from_code(stmt, "missing return in else")
                         body.append(stmt)
@@ -412,8 +417,7 @@ class Func(Decl):
                 else:
                     if stmt.orelse and isinstance(stmt.orelse[-1], Return):
                         # if / ... / else ... return
-                        stmt = stmt(then=stmt.then
-                                    + self._makeret(block[pos+1:]))
+                        stmt = stmt(then=stmt.then + self._makeret(block[pos + 1 :]))
                         if not self._isret(stmt.then):
                             LangError.from_code(stmt, "missing return in then")
                         body.append(stmt)
@@ -427,13 +431,13 @@ class Func(Decl):
 
     def call(self, args, ret, op, defs, stack=[]):
         if len(args) != len(self.args):
-            LangError.from_code(self, (f"expected {len(self.args)} arguments,"
-                                       f" got {len(args)}"))
+            LangError.from_code(
+                self, (f"expected {len(self.args)} arguments," f" got {len(args)}")
+            )
         if self.name in stack:
             LangError.from_code(self, "unsupported recursive function")
         nmap = {p: a for p, a in zip(self.args, args)}
-        scope = {n.name: Name.make(n, id=f"{self.name}_{n.name}")
-                 for n in self.locals}
+        scope = {n.name: Name.make(n, id=f"{self.name}_{n.name}") for n in self.locals}
         for stmt in self._makeret(self.body):
             bound = stmt.subst(scope).bind(nmap)
             yield from bound.inline(ret, op, defs, stack + [self.name])
@@ -443,6 +447,7 @@ class Func(Decl):
 # module
 #
 
+
 @dataclass(frozen=True)
 class Module(Compound):
     var: dict[str, Var]
@@ -451,16 +456,15 @@ class Module(Compound):
 
     def __post_init__(self):
         d = self.__dict__["all"] = {}
-        for _, decl in self.fields():
+        for _, decl in self.iterfields():
             d.update(decl)
 
     def _py(self):
         def lno(obj):
             return obj.__ast__.lineno
+
         yield 0, "from dataclasses import dataclass"
-        for decl, sep in [(self.cls, True),
-                          (self.var, False),
-                          (self.fun, True)]:
+        for decl, sep in [(self.cls, True), (self.var, False), (self.fun, True)]:
             if decl:
                 yield 0, ""
                 for n, d in enumerate(sorted(decl.values(), key=lno)):
