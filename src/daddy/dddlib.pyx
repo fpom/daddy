@@ -1164,7 +1164,7 @@ cdef class ddd:
                 lbl = "|".join(str(v) for v in sorted(values))
             out.write(f'    n{nid[node]} -> n{nid[succ]} [label="{lbl}"];\n')
 
-    def dot(self, path):
+    def dot(self, path, layout="dot", styles=False, **tikz):
         """dump `ddd` to GraphViz `dot` format
 
         If `path` as suffix `.dot`, a `dot` file is just saved, otherwise, it is
@@ -1173,6 +1173,7 @@ cdef class ddd:
 
         Arguments:
          - `str|pathlib.Path path`: target file
+         - `str layout`: Graphviz layout algorithm
         """
         path = Path(path)
         path_dot = path.with_suffix(".dot")
@@ -1181,7 +1182,12 @@ cdef class ddd:
             self._dot(out, defaultdict(), self)
             out.write("}\n")
         if (fmt := path.suffix.lower().lstrip(".")) != "dot":
-            check_call(["dot", f"-T{fmt}", "-o", path, path_dot])
+            if fmt != "tikz":
+                check_call(["dot", f"-K{layout}", f"-T{fmt}", "-o", path, path_dot])
+            else:
+                from .tikz import dot2tikz
+                dot2tikz(path_dot, path, layout, styles, **tikz)
+            path_dot.unlink()
 
     cpdef ddd clip(self):
         """restrict `ddd` to its domain

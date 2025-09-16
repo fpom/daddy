@@ -16,6 +16,7 @@ description = "Data Decision Diagrams with a pythonic interface"
 readme = "README.md"
 requires-python = ">= 3.9"
 dependencies = [
+  "pygraphviz>=1.11",
   "sympy",
 ]
 classifiers = [

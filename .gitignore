@@ -10,3 +10,4 @@ __pycache__
 /src/windows.zip
 /src/usr
 ,*
+/.envrc
