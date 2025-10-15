@@ -11,3 +11,5 @@ __pycache__
 /src/usr
 ,*
 /.envrc
+uv.lock
+src/daddy/*.so
