@@ -20,8 +20,8 @@ def dot2tikz(src: Path, tgt: Path, layout: str = "dot", styles=False, **tikz):
             "t": n.attr["label"],
             "s": n.attr.get("shape", None) == "square",
         }
-    xd = xmax - xmin
-    yd = ymax - ymin
+    xd = (xmax - xmin) or 1.0
+    yd = (ymax - ymin) or 1.0
     with open(tgt, "w") as out:
         if styles:
             out.write("\\tikzstyle{dddvar}=[draw,circle]\n")
