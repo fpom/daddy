@@ -27,6 +27,20 @@ cdef extern from "ddd/Hom.h":
         size_t hash() const
         bint is_selector()
 
+cdef extern from "assign/action.hh":
+    cdef enum comparator:
+        EQ, NEQ, LT, GT, LEQ, GEQ
+    cdef struct weightedsum_t:
+        int value
+        vector[int] coefs
+    cdef struct condition_t:
+        comparator op
+        int value
+        vector[int] coefs
+    cdef struct action_t:
+        vector[condition_t] cond
+        vector[weightedsum_t] assign
+
 cdef class domain:
     cdef dict vmap, ddoms, sdoms
     cdef readonly tuple vars

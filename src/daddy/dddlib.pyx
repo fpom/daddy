@@ -65,6 +65,9 @@ cdef extern from "ddd/Hom_Basic.hh":
 cdef extern from "assign/assign.hh":
     Hom linearAssignHom(int, vector[int], int)
 
+cdef extern from "assign/action.hh":
+    Hom actionHom(action_t act)
+
 cdef class domain:
     """`ddd` and `hom` factory
 
@@ -532,6 +535,53 @@ cdef class domain:
         except KeyError:
             raise ValueError(f"unknown variable {_tgt}")
         return self.makehom(linearAssignHom(t, c, _inc))
+
+    def action(self, *conditions, **assignments):
+        """return a `hom` that implements an action (conditional multiple assignment)
+
+        An action is defined by conditions and assignments, it selects all the
+        valuations that validate the conditions and apply the assignments on them.
+        Assignments are performed all together so that variables swaps is possible.
+
+        Each condition is defined by a pair `(op, lin)` where:
+        - `op` is one of `"=="`, `"!="`, `"<"`, `">"`, `"<="`, or `">="`
+        - `lin` is a `dict` mapping variables names or the empty string that define a
+          linear combination
+
+        For instance `("<", {"x": 1, "y": 2, "": 3})` is interpreted as
+        `0 < x + 2*y + 3`.
+
+        Each assignment is a `dict` interpreted as a linear combination. Omitted
+        variables as assumed to left unchanged (and so assigned to themselves).        
+
+        >>> dom = domain(x=3, y=3)
+        >>> # select all x > y then perform x, y = y, x
+        >>> sort = dom.action((">", {"x": -1, "y": 1}), x={"y": 1}, y={"x": 1})
+        >>> ordered = sort(dom.full)
+        >>> # this is the same as selecting all x < y from dom.full
+        >>> ordered == dom("x < y")(dom.full)
+        True
+        """
+        cdef dict[str, comparator] op = {
+            "==": comparator.EQ,
+            "!=": comparator.NEQ,
+            "<": comparator.LT,
+            ">": comparator.GT,
+            "<=": comparator.LEQ,
+            ">=": comparator.GEQ,
+        }
+        cdef dict[str, int] d
+        cdef str v, x
+        cdef action_t act = {
+            "cond": [{"op": op[v],
+                      "value": d.get("", 0),
+                      "coefs": [d.get(x, 0) for x in self.vars]}
+                     for v, d in conditions],
+            "assign": [{"value": (d := assignments.get(v, {})).get("", 0),
+                        "coefs": [d.get(x, 1 if v not in assignments and v == x else 0)
+                                  for x in self.vars]}
+                       for v in self.vars]}
+        return self.makehom(actionHom(act))
 
     def save(self, str path, *ddds, **headers):
         """save a series of `ddd`s to a file

@@ -17,7 +17,7 @@ DDD = Path("usr/local")
 URL = {
     "linux": "https://lip6.github.io/libDDD/linux.tgz",
     "darwin": "https://github.com/lip6/libDDD/raw/osx/osx.tgz",
-    "win32": "https://github.com/lip6/libDDD/raw/Windows/windows.zip"
+    "win32": "https://github.com/lip6/libDDD/raw/Windows/windows.zip",
 }
 SYS = sys.platform
 DDDURL = URL[SYS]
@@ -61,8 +61,7 @@ Options.annotate = False
 extensions = [
     Extension(
         "daddy.dddlib",
-        ["daddy/dddlib.pyx",
-         "assign/assign.cpp"],
+        ["daddy/dddlib.pyx", "assign/assign.cpp", "assign/action.cpp"],
         language="c++",
         include_dirs=[str(DDDINC), "."],
         extra_objects=[str(DDDLIB)],
@@ -73,6 +72,5 @@ extensions = [
 setup(
     name="daddy",
     packages=["daddy", "daddy.pygmy"],
-    ext_modules=cythonize(extensions,
-                          language_level=3),
+    ext_modules=cythonize(extensions, language_level=3),
 )

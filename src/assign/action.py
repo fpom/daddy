@@ -1,4 +1,7 @@
+"""PoC implementation of a generic libDDD action"""
+
 from dataclasses import dataclass
+from typing import Literal
 
 
 class ddd:
@@ -84,6 +87,8 @@ class Hom:
         else:
             e, x = d.head()
             s, h = self.phi(e, x)
+            if h is None:
+                return ddd()
             n, t = ddd(*s), d.tail()
             if n:
                 ctx = ctx.format(f"{n} + {{}}").replace("] + [", ", ")
@@ -107,67 +112,89 @@ class Hom:
 
 
 @dataclass
-class Up(Hom):
-    "insert an edge `var=val` after the top-most edge"
+class WeightedSum:
+    vars: tuple[str, ...]
+    coefs: tuple[int, ...]
+    const: int = 0
 
-    var: str
-    val: int
+    def push(self, var: str, val: int):
+        assert self.vars and var == self.vars[0]
+        return WeightedSum(
+            self.vars[1:], self.coefs[1:], self.const + self.coefs[0] * val
+        )
 
-    def __repr__(self):
-        return f"<|{self.var}={self.val}>"
+    def done(self):
+        return not any(self.coefs)
 
-    def phi(self, e, x):
-        """
-        >>> d = ddd(a=1, b=2, c=3, d=4)
-        >>> Up("x", 0)(d)
-        [a=1, x=0, b=2, c=3, d=4]
-        """
-        return [e, x, self.var, self.val], Hom()
+    def __call__(self):
+        assert not self.vars and self.done()
+        return self.const
 
 
 @dataclass
-class Down(Hom):
-    """perform assignment when src is after tgt
+class Condition:
+    sum: WeightedSum
+    op: Literal["==", "!=", "<", "<=", ">", ">="]
 
-    assume tgt was the head of the DDD and has been removed already
-    """
+    def push(self, var: str, val: int):
+        return Condition(self.sum.push(var, val), self.op)
 
-    tgt: str
-    coef: dict[str, int]
-    inc: int = 0
+    def done(self):
+        return self.sum.done()
 
-    def __repr__(self):
-        return f"<{self.tgt}={self.coef}+{self.inc}|>"
+    def __call__(self):
+        if self.op == "==":
+            return self.sum() == 0
+        elif self.op == "!=":
+            return self.sum() != 0
+        elif self.op == "<":
+            return self.sum() < 0
+        elif self.op == "<=":
+            return self.sum() <= 0
+        elif self.op == ">":
+            return self.sum() > 0
+        elif self.op == ">=":
+            return self.sum() >= 0
+        else:
+            raise ValueError(f"invalid operator {self.op!r}")
 
-    def phi(self, e, x):
-        # new const to add = old + this var multiplied
-        ni = x * self.coef[e] + self.inc
-        # recurse in tail with new coefs, then put head back
-        return [], Up(e, x) * Down(self.tgt, self.coef, ni)
+
+@dataclass
+class Action(Hom):
+    cond: tuple[Condition, ...]
+    assign: dict[str, WeightedSum]
+
+    def phi(self, e: str, x: int):
+        cond: list[Condition] = []
+        for old in self.cond:
+            new = old.push(e, x)
+            if new.done():
+                if not new():
+                    return [], None
+            else:
+                cond.append(new)
+        return [], Action(
+            tuple(cond),
+            {k: v.push(e, x) for k, v in self.assign.items()},
+        )
 
     def one(self):
-        # when reaching end, put result for target, it will be put back
-        # at its position using all the Up's
-        return ddd(self.tgt, self.inc)
+        d = ddd()
+        for v, a in reversed(self.assign.items()):
+            d = ddd(v, a()) + d
+        return d
 
 
-@dataclass
-class Assign(Hom):
-    "main assignment class"
-
-    tgt: str
-    coef: dict[str, int]
-    inc: int = 0
-
-    def __repr__(self):
-        return f"<{self.tgt}={self.coef}+{self.inc}>"
-
-    def phi(self, e, x):
-        # new const to add = old + this var multiplied
-        ni = x * self.coef[e] + self.inc
-        if e == self.tgt:
-            # need Down to perform assignment after computation
-            return [], Down(self.tgt, self.coef, ni)
-        else:
-            # just recurse in tail
-            return [e, x], Assign(self.tgt, self.coef, ni)
+if __name__ == "__main__":
+    d = ddd(a=1, b=2, c=3)
+    act = Action(
+        (
+            Condition(WeightedSum(d.k, (1, 2, 3), 0), ">"),
+            Condition(WeightedSum(d.k, (0, 0, 1), 0), "!="),
+        ),
+        {
+            "a": WeightedSum(d.k, (1, 0, 0), 0),
+            "b": WeightedSum(d.k, (0, 1, 1), 1),
+            "c": WeightedSum(d.k, (0, 0, 0), 0),
+        },
+    )
